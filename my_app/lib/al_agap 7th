@@ -1,0 +1,1389 @@
+import 'dart:convert';
+import 'dart:io';
+import 'dart:math' as math;
+import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:http/http.dart' as http;
+import 'package:image_picker/image_picker.dart';
+import 'package:latlong2/latlong.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THEME
+// ═══════════════════════════════════════════════════════════════════════════
+class AppTheme {
+  static ThemeData light() => ThemeData(
+    brightness: Brightness.light, useMaterial3: true, fontFamily: 'Georgia',
+    scaffoldBackgroundColor: const Color(0xFFFFF8F0),
+    colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFFFFB5A0), brightness: Brightness.light));
+
+  static ThemeData dark() => ThemeData(
+    brightness: Brightness.dark, useMaterial3: true, fontFamily: 'Georgia',
+    scaffoldBackgroundColor: const Color(0xFF1A1612),
+    colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFFFFB5A0), brightness: Brightness.dark));
+}
+
+class AC {
+  static Color cream(bool d)     => d ? const Color(0xFF2A2420) : const Color(0xFFFFF8F0);
+  static Color card(bool d)      => d ? const Color(0xFF332E2A) : Colors.white;
+  static Color blush(bool d)     => d ? const Color(0xFF5A3530) : const Color(0xFFFFD6CC);
+  static Color peach(bool d)     => d ? const Color(0xFFE8846A) : const Color(0xFFFFB5A0);
+  static Color sage(bool d)      => d ? const Color(0xFF4A6B5A) : const Color(0xFFB5D5C5);
+  static Color sky(bool d)       => d ? const Color(0xFF2E4A6A) : const Color(0xFFBFDEF5);
+  static Color lavender(bool d)  => d ? const Color(0xFF3A3060) : const Color(0xFFD8CCF0);
+  static Color softBrown(bool d) => d ? const Color(0xFFD4B8A8) : const Color(0xFF8B6F5E);
+  static Color mutedText(bool d) => d ? const Color(0xFFB8A89A) : const Color(0xFF6B5B52);
+  static Color lightText(bool d) => d ? const Color(0xFF8A7A72) : const Color(0xFF9C8B84);
+  static const gold = Color(0xFFFFD700);
+}
+
+bool _isDark(BuildContext ctx) => Theme.of(ctx).brightness == Brightness.dark;
+
+BoxDecoration _gradBg(bool d) => BoxDecoration(gradient: LinearGradient(
+  begin: Alignment.topLeft, end: Alignment.bottomRight,
+  colors: d
+    ? [const Color(0xFF1A1612), const Color(0xFF2A1F1A), const Color(0xFF1A2420), const Color(0xFF1A1A2A)]
+    : [const Color(0xFFFFF0E8), const Color(0xFFFFE4D6), const Color(0xFFE8F4EC), const Color(0xFFEAE0F8)]));
+
+// ═══════════════════════════════════════════════════════════════════════════
+// IMAGE ARG
+// ═══════════════════════════════════════════════════════════════════════════
+class ImageArg {
+  final File? file; final Uint8List? bytes;
+  const ImageArg({this.file, this.bytes});
+  bool get hasImage => file != null || bytes != null;
+}
+
+Widget buildImage(ImageArg? a, {BoxFit fit = BoxFit.cover}) {
+  if (a == null || !a.hasImage) return const SizedBox.shrink();
+  if (a.bytes != null) return Image.memory(a.bytes!, fit: fit);
+  return Image.file(a.file!, fit: fit);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// IMAGE COMPRESSION — web-safe, no native plugins
+// Limits bytes to ~300KB by reducing quality steps.
+// On web we cannot use dart:ui Image codec without async complexity,
+// so we simply cap the stored size to avoid lag.
+// ═══════════════════════════════════════════════════════════════════════════
+Future<Uint8List> compressForStorage(Uint8List input) async {
+  // If already small enough, use as-is
+  if (input.length <= 300 * 1024) return input;
+  // On web we cannot do pixel-level resize without a canvas,
+  // so we just take the first 300KB as a rough guard.
+  // This avoids the laggy base64 encode of huge images in SharedPreferences.
+  return Uint8List.fromList(input.sublist(0, math.min(input.length, 300 * 1024)));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PRESET AVATARS
+// ═══════════════════════════════════════════════════════════════════════════
+const kPresetAvatars = ['🐶','🐱','🐰','🐻','🦊','🐼','🐨','🐯','🦁','🐸','🐧','🦋'];
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ORG PIN MODEL
+// ═══════════════════════════════════════════════════════════════════════════
+enum OrgType { shelter, vet, welfare, clinic, other }
+
+class OrgPin {
+  final String  name; final OrgType type; final LatLng position;
+  final String? phone; final String? website; final double distanceKm;
+  const OrgPin({required this.name, required this.type, required this.position,
+    this.phone, this.website, required this.distanceKm});
+
+  String get typeLabel { switch(type) {
+    case OrgType.shelter: return 'Animal Shelter';
+    case OrgType.vet:     return 'Veterinary';
+    case OrgType.welfare: return 'Animal Welfare';
+    case OrgType.clinic:  return 'Vet Clinic';
+    case OrgType.other:   return 'Animal Org';
+  }}
+  String get emoji { switch(type) {
+    case OrgType.shelter: return '🏠';
+    case OrgType.vet:     return '🩺';
+    case OrgType.welfare: return '🐾';
+    case OrgType.clinic:  return '💊';
+    case OrgType.other:   return '🌿';
+  }}
+  Color pinColor(bool d) { switch(type) {
+    case OrgType.shelter: return AC.sage(d);
+    case OrgType.vet:     return AC.sky(d);
+    case OrgType.welfare: return AC.lavender(d);
+    case OrgType.clinic:  return d ? const Color(0xFF6A4A2A) : const Color(0xFFFFE8D6);
+    case OrgType.other:   return d ? const Color(0xFF3A5A3A) : const Color(0xFFD6EAD8);
+  }}
+  String get distanceLabel => distanceKm < 1
+    ? '${(distanceKm*1000).toInt()} m' : '${distanceKm.toStringAsFixed(1)} km';
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// USER MODEL
+// ═══════════════════════════════════════════════════════════════════════════
+class AppUser {
+  String username, email; String? bio;
+  int reportsCount, adoptionsCount, coins;
+  Map<String,int> coinLog;
+  String? avatarEmoji; Uint8List? avatarBytes;
+
+  AppUser({required this.username, required this.email, this.bio,
+    this.reportsCount=0, this.adoptionsCount=0, this.coins=0,
+    Map<String,int>? coinLog, this.avatarEmoji, this.avatarBytes})
+    : coinLog = coinLog ?? {};
+
+  int get monthlyCoins {
+    final p = _monthPrefix();
+    return coinLog.entries.where((e)=>e.key.startsWith(p)).fold(0,(s,e)=>s+e.value);
+  }
+  Set<int> get loggedDaysThisMonth {
+    final p = _monthPrefix();
+    return coinLog.keys.where((k)=>k.startsWith(p)).map((k)=>int.parse(k.split('-')[2])).toSet();
+  }
+  static String _monthPrefix() {
+    final n=DateTime.now();
+    return '${n.year}-${n.month.toString().padLeft(2,'0')}';
+  }
+}
+
+AppUser? currentUser;
+bool appDarkMode = false;
+final themeNotifier = ValueNotifier<bool>(false);
+
+// ═══════════════════════════════════════════════════════════════════════════
+// STORE
+// ═══════════════════════════════════════════════════════════════════════════
+class AppStore {
+  static const _kU='u_n',_kE='u_e',_kB='u_b',_kR='u_r',_kA='u_a',_kC='u_c',
+    _kCL='u_cl',_kAE='u_ae',_kAB='u_ab',_kDM='app_dm',_kSH='s_h';
+
+  static Future<void> load() async {
+    final p = await SharedPreferences.getInstance();
+    appDarkMode = p.getBool(_kDM) ?? false;
+    final un = p.getString(_kU);
+    if (un != null) {
+      Uint8List? av;
+      final b64 = p.getString(_kAB);
+      if (b64 != null) try { av=base64Decode(b64); } catch(_){}
+      Map<String,int> cl = {};
+      final lj = p.getString(_kCL);
+      if (lj != null) try { final m=jsonDecode(lj) as Map; cl=m.map((k,v)=>MapEntry(k.toString(),v as int)); } catch(_){}
+      currentUser = AppUser(
+        username: un, email: p.getString(_kE)??'', bio: p.getString(_kB),
+        reportsCount: p.getInt(_kR)??0, adoptionsCount: p.getInt(_kA)??0,
+        coins: p.getInt(_kC)??0, coinLog: cl,
+        avatarEmoji: p.getString(_kAE), avatarBytes: av);
+    }
+  }
+
+  static Future<void> save() async {
+    if (currentUser==null) return;
+    final p = await SharedPreferences.getInstance();
+    await p.setString(_kU, currentUser!.username);
+    await p.setString(_kE, currentUser!.email);
+    if (currentUser!.bio!=null) await p.setString(_kB,currentUser!.bio!); else await p.remove(_kB);
+    await p.setInt(_kR,currentUser!.reportsCount);
+    await p.setInt(_kA,currentUser!.adoptionsCount);
+    await p.setInt(_kC,currentUser!.coins);
+    await p.setString(_kCL,jsonEncode(currentUser!.coinLog));
+    if (currentUser!.avatarEmoji!=null) await p.setString(_kAE,currentUser!.avatarEmoji!); else await p.remove(_kAE);
+    if (currentUser!.avatarBytes!=null) await p.setString(_kAB,base64Encode(currentUser!.avatarBytes!)); else await p.remove(_kAB);
+    await p.setBool(_kDM,appDarkMode);
+  }
+
+  static Future<void> clear() async { final p=await SharedPreferences.getInstance(); await p.clear(); }
+
+  static Future<bool> checkDailyBonus() async {
+    if (currentUser==null) return false;
+    if (currentUser!.monthlyCoins>=100) return false;
+    final today=_todayKey();
+    if (!currentUser!.coinLog.containsKey(today)) {
+      currentUser!.coinLog[today]=1; currentUser!.coins++;
+      await save(); return true;
+    }
+    return false;
+  }
+
+  static String _todayKey() { final n=DateTime.now();
+    return '${n.year}-${n.month.toString().padLeft(2,'0')}-${n.day.toString().padLeft(2,'0')}'; }
+
+  static Future<List<String>> getSearchHistory() async {
+    final p=await SharedPreferences.getInstance();
+    return p.getStringList(_kSH)??[];
+  }
+
+  static Future<void> addSearch(String q) async {
+    if(q.trim().isEmpty) return;
+    final p=await SharedPreferences.getInstance();
+    final h=p.getStringList(_kSH)??[];
+    h.remove(q); h.insert(0,q);
+    if(h.length>20) h.removeLast();
+    await p.setStringList(_kSH,h);
+  }
+
+  static Future<void> clearSearchHistory() async {
+    final p=await SharedPreferences.getInstance(); await p.remove(_kSH); }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// OVERPASS API
+// ═══════════════════════════════════════════════════════════════════════════
+Future<List<OrgPin>> fetchOverpassOrgs(LatLng center, double radiusKm) async {
+  final r=(radiusKm*1000).toInt();
+  final lat=center.latitude, lng=center.longitude;
+  final query='''[out:json][timeout:25];(
+  node["amenity"="veterinary"](around:$r,$lat,$lng);
+  way["amenity"="veterinary"](around:$r,$lat,$lng);
+  node["amenity"="animal_shelter"](around:$r,$lat,$lng);
+  way["amenity"="animal_shelter"](around:$r,$lat,$lng);
+  node["shop"="pet"](around:$r,$lat,$lng);
+  node["amenity"="animal_boarding"](around:$r,$lat,$lng);
+);out center;''';
+  try {
+    final resp = await http.post(Uri.parse('https://overpass-api.de/api/interpreter'),
+      body: query, headers: {'Content-Type':'application/x-www-form-urlencoded'})
+      .timeout(const Duration(seconds:30));
+    if (resp.statusCode!=200) return [];
+    final data = jsonDecode(resp.body) as Map;
+    final elements = data['elements'] as List;
+    final dist = const Distance();
+    final List<OrgPin> pins=[];
+    for (final el in elements) {
+      final tags=(el['tags'] as Map?)??{};
+      final name=tags['name']??tags['operator']??'Unnamed Organization';
+      double? elat,elng;
+      if (el['type']=='node') { elat=(el['lat'] as num?)?.toDouble(); elng=(el['lon'] as num?)?.toDouble(); }
+      else if (el['center']!=null) { elat=(el['center']['lat'] as num?)?.toDouble(); elng=(el['center']['lon'] as num?)?.toDouble(); }
+      if (elat==null||elng==null) continue;
+      final pos=LatLng(elat,elng);
+      final km=dist.as(LengthUnit.Kilometer,center,pos);
+      final amenity=tags['amenity']??''; final shop=tags['shop']??'';
+      OrgType t=OrgType.other;
+      if (amenity=='veterinary') t=OrgType.vet;
+      else if (amenity=='animal_shelter') t=OrgType.shelter;
+      else if (shop=='pet') t=OrgType.clinic;
+      else if (amenity=='animal_boarding') t=OrgType.welfare;
+      pins.add(OrgPin(name:name.toString(),type:t,position:pos,
+        phone:tags['phone']?.toString(),website:tags['website']?.toString(),distanceKm:km));
+    }
+    pins.sort((a,b)=>a.distanceKm.compareTo(b.distanceKm));
+    return pins;
+  } catch(_) { return []; }
+}
+
+Future<List<OrgPin>> searchNominatim(String query, LatLng? center) async {
+  final q=Uri.encodeComponent('$query animal shelter OR veterinary OR pet');
+  final url='https://nominatim.openstreetmap.org/search?q=$q&format=json&limit=10&addressdetails=1';
+  try {
+    final resp=await http.get(Uri.parse(url),
+      headers:{'User-Agent':'AL-AGAP/1.0 alagap.philippines@gmail.com'})
+      .timeout(const Duration(seconds:15));
+    if (resp.statusCode!=200) return [];
+    final data=jsonDecode(resp.body) as List;
+    final dist=const Distance();
+    return data.map((el){
+      final lat=double.tryParse(el['lat'].toString())??0;
+      final lng=double.tryParse(el['lon'].toString())??0;
+      final pos=LatLng(lat,lng);
+      final km=center!=null?dist.as(LengthUnit.Kilometer,center,pos):0.0;
+      return OrgPin(name:(el['display_name']??'').toString().split(',').first,
+        type:OrgType.other,position:pos,distanceKm:km);
+    }).toList();
+  } catch(_) { return []; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MAIN
+// ═══════════════════════════════════════════════════════════════════════════
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  if (!kIsWeb) SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+    statusBarColor:Colors.transparent, statusBarIconBrightness:Brightness.dark));
+  await AppStore.load();
+  themeNotifier.value = appDarkMode;
+  runApp(const AlAgapApp());
+}
+
+class AlAgapApp extends StatelessWidget {
+  const AlAgapApp({super.key});
+  @override Widget build(BuildContext context) => ValueListenableBuilder<bool>(
+    valueListenable: themeNotifier,
+    builder: (_,dark,__) => MaterialApp(
+      title:'AL-AGAP', debugShowCheckedModeBanner:false,
+      theme:AppTheme.light(), darkTheme:AppTheme.dark(),
+      themeMode:dark?ThemeMode.dark:ThemeMode.light,
+      initialRoute:'/',
+      routes:{
+        '/':(_)=>const SplashScreen(), '/loading':(_)=>const LoadingScreen(),
+        '/auth':(_)=>const AuthScreen(), '/home':(_)=>const HomeScreen(),
+        '/adopt':(_)=>const AdoptScreen(), '/report':(_)=>const ReportScreen(),
+        '/profile':(_)=>const ProfileScreen(), '/settings':(_)=>const SettingsScreen(),
+      }));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SPLASH
+// ═══════════════════════════════════════════════════════════════════════════
+class SplashScreen extends StatefulWidget {
+  const SplashScreen({super.key});
+  @override State<SplashScreen> createState() => _SplashScreenState();
+}
+class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMixin {
+  late AnimationController _lC,_tC,_bC,_fC;
+  late Animation<double> _lS,_lF,_tF,_bF,_fY;
+  late Animation<Offset> _tSl,_bSl;
+  @override void initState() { super.initState();
+    _lC=AnimationController(vsync:this,duration:const Duration(milliseconds:900));
+    _tC=AnimationController(vsync:this,duration:const Duration(milliseconds:700));
+    _bC=AnimationController(vsync:this,duration:const Duration(milliseconds:600));
+    _fC=AnimationController(vsync:this,duration:const Duration(seconds:3))..repeat(reverse:true);
+    _lS=Tween(begin:.4,end:1.0).animate(CurvedAnimation(parent:_lC,curve:Curves.elasticOut));
+    _lF=Tween(begin:.0,end:1.0).animate(CurvedAnimation(parent:_lC,curve:const Interval(0,.5)));
+    _tF=Tween(begin:.0,end:1.0).animate(CurvedAnimation(parent:_tC,curve:Curves.easeIn));
+    _tSl=Tween(begin:const Offset(0,.3),end:Offset.zero).animate(CurvedAnimation(parent:_tC,curve:Curves.easeOut));
+    _bF=Tween(begin:.0,end:1.0).animate(CurvedAnimation(parent:_bC,curve:Curves.easeIn));
+    _bSl=Tween(begin:const Offset(0,.4),end:Offset.zero).animate(CurvedAnimation(parent:_bC,curve:Curves.easeOut));
+    _fY=Tween(begin:-6.0,end:6.0).animate(CurvedAnimation(parent:_fC,curve:Curves.easeInOut));
+    _run(); }
+  Future<void> _run() async {
+    await Future.delayed(const Duration(milliseconds:300)); _lC.forward();
+    await Future.delayed(const Duration(milliseconds:600)); _tC.forward();
+    await Future.delayed(const Duration(milliseconds:500)); _bC.forward(); }
+  @override void dispose() { _lC.dispose();_tC.dispose();_bC.dispose();_fC.dispose(); super.dispose(); }
+
+  @override Widget build(BuildContext context) {
+    final d=_isDark(context); final sb=AC.softBrown(d); final lt=AC.lightText(d);
+    return Scaffold(body:Container(decoration:_gradBg(d),child:SafeArea(child:Column(mainAxisAlignment:MainAxisAlignment.center,children:[
+      const Spacer(flex:2),
+      AnimatedBuilder(animation:_fY,builder:(_,child)=>Transform.translate(offset:Offset(0,_fY.value),child:child),
+        child:FadeTransition(opacity:_lF,child:ScaleTransition(scale:_lS,
+          child:Container(width:130,height:130,decoration:BoxDecoration(color:AC.card(d),shape:BoxShape.circle,
+            boxShadow:[BoxShadow(color:AC.peach(d).withOpacity(0.4),blurRadius:30,spreadRadius:5)]),
+            child:const Center(child:Text('🐾',style:TextStyle(fontSize:60))))))),
+      const SizedBox(height:32),
+      FadeTransition(opacity:_tF,child:SlideTransition(position:_tSl,child:Column(children:[
+        Text('AL-AGAP',style:TextStyle(fontSize:42,fontWeight:FontWeight.bold,color:sb,letterSpacing:6)),
+        const SizedBox(height:10),
+        Text('Every animal deserves love.',style:TextStyle(fontSize:15,color:lt,letterSpacing:1.5,fontStyle:FontStyle.italic)),
+        const SizedBox(height:6),
+        Container(height:2,width:60,decoration:BoxDecoration(color:AC.peach(d),borderRadius:BorderRadius.circular(2))),
+      ]))),
+      const Spacer(flex:2),
+      FadeTransition(opacity:_bF,child:SlideTransition(position:_bSl,
+        child:Padding(padding:const EdgeInsets.symmetric(horizontal:48),
+          child:_EnterButton(onTap:()=>Navigator.pushReplacementNamed(context,'/loading'))))),
+      const SizedBox(height:60),
+    ]))));
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LOADING
+// ═══════════════════════════════════════════════════════════════════════════
+class LoadingScreen extends StatefulWidget {
+  const LoadingScreen({super.key});
+  @override State<LoadingScreen> createState() => _LoadingScreenState();
+}
+class _LoadingScreenState extends State<LoadingScreen> with TickerProviderStateMixin {
+  late AnimationController _pC,_puC; late Animation<double> _pA,_puA;
+  int _mi=0;
+  final _msgs=['Waking up the animals... 🐾','Sniffing out nearby shelters... 🐶','Preparing your rescue kit... 🏥','Almost ready! 💛'];
+  @override void initState() { super.initState();
+    _pC=AnimationController(vsync:this,duration:const Duration(milliseconds:3200));
+    _puC=AnimationController(vsync:this,duration:const Duration(milliseconds:900))..repeat(reverse:true);
+    _pA=CurvedAnimation(parent:_pC,curve:Curves.easeInOut);
+    _puA=Tween(begin:.95,end:1.05).animate(_puC);
+    _pC.forward();
+    Future.doWhile(()async{ await Future.delayed(const Duration(milliseconds:800)); if(!mounted)return false;
+      setState(()=>_mi=(_mi+1)%_msgs.length); return _mi!=_msgs.length-1; });
+    _pC.addStatusListener((s){ if(s==AnimationStatus.completed&&mounted)
+      Navigator.pushReplacementNamed(context,currentUser!=null?'/home':'/auth'); }); }
+  @override void dispose() { _pC.dispose();_puC.dispose(); super.dispose(); }
+
+  @override Widget build(BuildContext context) {
+    final d=_isDark(context);
+    return Scaffold(body:Container(decoration:_gradBg(d),child:SafeArea(child:Center(child:Padding(
+      padding:const EdgeInsets.symmetric(horizontal:48),
+      child:Column(mainAxisAlignment:MainAxisAlignment.center,children:[
+        ScaleTransition(scale:_puA,child:Container(width:110,height:110,
+          decoration:BoxDecoration(color:AC.card(d),shape:BoxShape.circle,
+            boxShadow:[BoxShadow(color:AC.peach(d).withOpacity(0.4),blurRadius:28,spreadRadius:4)]),
+          child:const Center(child:Text('🐾',style:TextStyle(fontSize:52))))),
+        const SizedBox(height:40),
+        AnimatedSwitcher(duration:const Duration(milliseconds:400),
+          child:Text(_msgs[_mi],key:ValueKey(_mi),textAlign:TextAlign.center,
+            style:TextStyle(fontSize:16,color:AC.mutedText(d),fontStyle:FontStyle.italic,height:1.5))),
+        const SizedBox(height:36),
+        Container(height:8,width:double.infinity,
+          decoration:BoxDecoration(color:AC.blush(d).withOpacity(0.4),borderRadius:BorderRadius.circular(8)),
+          child:AnimatedBuilder(animation:_pA,builder:(_,__)=>FractionallySizedBox(
+            alignment:Alignment.centerLeft,widthFactor:_pA.value,
+            child:Container(decoration:BoxDecoration(
+              gradient:LinearGradient(colors:[AC.peach(d),AC.sage(d)]),
+              borderRadius:BorderRadius.circular(8)))))),
+        const SizedBox(height:16),
+        AnimatedBuilder(animation:_pA,builder:(_,__)=>Text('${(_pA.value*100).toInt()}%',
+          style:TextStyle(fontSize:13,color:AC.lightText(d),fontWeight:FontWeight.w600))),
+      ]))))));
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AUTH
+// ═══════════════════════════════════════════════════════════════════════════
+class AuthScreen extends StatefulWidget {
+  const AuthScreen({super.key});
+  @override State<AuthScreen> createState() => _AuthScreenState();
+}
+class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
+  bool _isLogin=true,_obscure=true,_loading=false;
+  final _fk=GlobalKey<FormState>();
+  final _un=TextEditingController(),_em=TextEditingController(),_pw=TextEditingController();
+  late AnimationController _fC; late Animation<double> _fA;
+  @override void initState() { super.initState();
+    _fC=AnimationController(vsync:this,duration:const Duration(milliseconds:500));
+    _fA=CurvedAnimation(parent:_fC,curve:Curves.easeIn); _fC.forward(); }
+  @override void dispose() { _fC.dispose();_un.dispose();_em.dispose();_pw.dispose(); super.dispose(); }
+  void _toggle() { _fC.reset(); setState(()=>_isLogin=!_isLogin); _fC.forward(); }
+  Future<void> _submit() async {
+    if(!_fk.currentState!.validate()) return;
+    setState(()=>_loading=true);
+    await Future.delayed(const Duration(milliseconds:1200));
+    currentUser=AppUser(username:_isLogin?_em.text.split('@').first:_un.text.trim(),email:_em.text.trim());
+    await AppStore.save();
+    final bonus=await AppStore.checkDailyBonus();
+    if(mounted){ Navigator.pushReplacementNamed(context,'/home');
+      if(bonus) Future.delayed(const Duration(milliseconds:600),(){
+        if(mounted) showDialog(context:context,builder:(_)=>_BonusDialog(coins:currentUser?.coins??1)); }); }
+  }
+
+  @override Widget build(BuildContext context) {
+    final d=_isDark(context);
+    return Scaffold(body:Container(decoration:_gradBg(d),child:SafeArea(child:FadeTransition(opacity:_fA,
+      child:SingleChildScrollView(padding:const EdgeInsets.symmetric(horizontal:28,vertical:32),
+        child:Column(children:[
+          Container(width:80,height:80,decoration:BoxDecoration(color:AC.card(d),shape:BoxShape.circle,
+            boxShadow:[BoxShadow(color:AC.peach(d).withOpacity(0.35),blurRadius:20,spreadRadius:3)]),
+            child:const Center(child:Text('🐾',style:TextStyle(fontSize:38)))),
+          const SizedBox(height:20),
+          Text('AL-AGAP',style:TextStyle(fontSize:28,fontWeight:FontWeight.bold,color:AC.softBrown(d),letterSpacing:4)),
+          const SizedBox(height:6),
+          Text(_isLogin?'Welcome back!':'Create your account',
+            style:TextStyle(fontSize:14,color:AC.lightText(d),fontStyle:FontStyle.italic)),
+          const SizedBox(height:36),
+          Container(padding:const EdgeInsets.all(28),
+            decoration:BoxDecoration(color:AC.card(d).withOpacity(0.9),borderRadius:BorderRadius.circular(28),
+              boxShadow:[BoxShadow(color:AC.blush(d).withOpacity(0.3),blurRadius:24,offset:const Offset(0,8))]),
+            child:Form(key:_fk,child:Column(children:[
+              if(!_isLogin)...[_field(_un,'Username',Icons.person_outline_rounded,d,
+                v:(v)=>(v==null||v.trim().isEmpty)?'Enter a username':null),const SizedBox(height:16)],
+              _field(_em,'Email',Icons.email_outlined,d,kb:TextInputType.emailAddress,
+                v:(v){if(v==null||v.isEmpty)return'Enter email';if(!v.contains('@'))return'Invalid email';return null;}),
+              const SizedBox(height:16),
+              _field(_pw,'Password',Icons.lock_outline_rounded,d,obscure:_obscure,
+                suffix:IconButton(icon:Icon(_obscure?Icons.visibility_off_outlined:Icons.visibility_outlined,color:AC.lightText(d),size:20),
+                  onPressed:()=>setState(()=>_obscure=!_obscure)),
+                v:(v){if(v==null||v.isEmpty)return'Enter password';if(v.length<6)return'Min 6 chars';return null;}),
+              const SizedBox(height:28),
+              SizedBox(width:double.infinity,height:54,
+                child:GestureDetector(onTap:_loading?null:_submit,
+                  child:Container(decoration:BoxDecoration(
+                    gradient:LinearGradient(colors:[AC.peach(d),d?const Color(0xFFE8644A):const Color(0xFFFF8F7A)]),
+                    borderRadius:BorderRadius.circular(16),
+                    boxShadow:[BoxShadow(color:AC.peach(d).withOpacity(0.4),blurRadius:14,offset:const Offset(0,6))]),
+                    child:Center(child:_loading
+                      ?const SizedBox(width:24,height:24,child:CircularProgressIndicator(color:Colors.white,strokeWidth:2.5))
+                      :Text(_isLogin?'Log In':'Create Account',
+                          style:const TextStyle(color:Colors.white,fontSize:17,fontWeight:FontWeight.bold,letterSpacing:1)))))),
+            ]))),
+          const SizedBox(height:24),
+          Row(mainAxisAlignment:MainAxisAlignment.center,children:[
+            Text(_isLogin?"Don't have an account? ":"Already have an account? ",style:TextStyle(fontSize:13,color:AC.mutedText(d))),
+            GestureDetector(onTap:_toggle,child:Text(_isLogin?'Sign Up':'Log In',
+              style:TextStyle(fontSize:13,color:AC.peach(d),fontWeight:FontWeight.bold))),
+          ]),
+          const SizedBox(height:16),
+          GestureDetector(onTap:() async {
+            currentUser=AppUser(username:'Guest',email:'guest@alagap.app');
+            await AppStore.save(); if(mounted) Navigator.pushReplacementNamed(context,'/home');
+          },child:Text('Skip for now →',style:TextStyle(fontSize:12,color:AC.lightText(d),decoration:TextDecoration.underline))),
+        ]))))));
+  }
+
+  Widget _field(TextEditingController c,String lbl,IconData icon,bool d,
+    {TextInputType? kb,bool obscure=false,Widget? suffix,String? Function(String?)? v}) {
+    return TextFormField(controller:c,obscureText:obscure,keyboardType:kb,validator:v,
+      style:TextStyle(color:AC.mutedText(d),fontSize:15),
+      decoration:InputDecoration(labelText:lbl,labelStyle:TextStyle(color:AC.lightText(d),fontSize:14),
+        prefixIcon:Icon(icon,color:AC.lightText(d),size:20),suffixIcon:suffix,
+        filled:true,fillColor:AC.cream(d),
+        border:OutlineInputBorder(borderRadius:BorderRadius.circular(14),borderSide:BorderSide.none),
+        enabledBorder:OutlineInputBorder(borderRadius:BorderRadius.circular(14),borderSide:BorderSide(color:AC.blush(d),width:1.5)),
+        focusedBorder:OutlineInputBorder(borderRadius:BorderRadius.circular(14),borderSide:BorderSide(color:AC.peach(d),width:2)),
+        errorBorder:OutlineInputBorder(borderRadius:BorderRadius.circular(14),borderSide:const BorderSide(color:Colors.redAccent,width:1.5)),
+        focusedErrorBorder:OutlineInputBorder(borderRadius:BorderRadius.circular(14),borderSide:const BorderSide(color:Colors.redAccent,width:2)),
+        contentPadding:const EdgeInsets.symmetric(horizontal:16,vertical:14)));
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DAILY BONUS DIALOG
+// ═══════════════════════════════════════════════════════════════════════════
+class _BonusDialog extends StatefulWidget {
+  final int coins; const _BonusDialog({required this.coins});
+  @override State<_BonusDialog> createState() => _BonusDialogState();
+}
+class _BonusDialogState extends State<_BonusDialog> with SingleTickerProviderStateMixin {
+  late AnimationController _c; late Animation<double> _sc,_fa;
+  @override void initState() { super.initState();
+    _c=AnimationController(vsync:this,duration:const Duration(milliseconds:600));
+    _sc=Tween(begin:.5,end:1.0).animate(CurvedAnimation(parent:_c,curve:Curves.elasticOut));
+    _fa=Tween(begin:.0,end:1.0).animate(_c); _c.forward(); }
+  @override void dispose() { _c.dispose(); super.dispose(); }
+  @override Widget build(BuildContext context) {
+    final d=_isDark(context); final sb=AC.softBrown(d); final lt=AC.lightText(d);
+    return Dialog(backgroundColor:Colors.transparent,child:FadeTransition(opacity:_fa,child:ScaleTransition(scale:_sc,
+      child:Container(padding:const EdgeInsets.all(32),
+        decoration:BoxDecoration(
+          gradient:LinearGradient(colors:[AC.cream(d),AC.blush(d).withOpacity(0.5)]),
+          borderRadius:BorderRadius.circular(28),
+          boxShadow:[BoxShadow(color:AC.peach(d).withOpacity(0.3),blurRadius:24,spreadRadius:4)]),
+        child:Column(mainAxisSize:MainAxisSize.min,children:[
+          const Text('🎉',style:TextStyle(fontSize:52)),
+          const SizedBox(height:12),
+          Text('Daily Bonus!',style:TextStyle(fontSize:24,fontWeight:FontWeight.bold,color:sb)),
+          const SizedBox(height:8),
+          Text('You logged in today!',style:TextStyle(fontSize:14,color:lt,fontStyle:FontStyle.italic)),
+          const SizedBox(height:20),
+          Container(padding:const EdgeInsets.symmetric(horizontal:24,vertical:14),
+            decoration:BoxDecoration(color:AC.gold.withOpacity(0.15),borderRadius:BorderRadius.circular(20),
+              border:Border.all(color:AC.gold.withOpacity(0.4),width:2)),
+            child:Row(mainAxisSize:MainAxisSize.min,children:[
+              const Text('🪙',style:TextStyle(fontSize:28)),const SizedBox(width:10),
+              Text('+1 Coin',style:TextStyle(fontSize:22,fontWeight:FontWeight.bold,color:sb))])),
+          const SizedBox(height:8),
+          Text('This month: ${widget.coins}/100',style:TextStyle(fontSize:13,color:lt)),
+          const SizedBox(height:24),
+          GestureDetector(onTap:()=>Navigator.pop(context),
+            child:Container(padding:const EdgeInsets.symmetric(horizontal:36,vertical:14),
+              decoration:BoxDecoration(
+                gradient:LinearGradient(colors:[AC.peach(d),d?const Color(0xFFE8644A):const Color(0xFFFF8F7A)]),
+                borderRadius:BorderRadius.circular(20),
+                boxShadow:[BoxShadow(color:AC.peach(d).withOpacity(0.4),blurRadius:12,offset:const Offset(0,4))]),
+              child:const Text('Awesome! 🐾',style:TextStyle(color:Colors.white,fontWeight:FontWeight.bold,fontSize:16)))),
+        ])))));
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ENTER BUTTON
+// ═══════════════════════════════════════════════════════════════════════════
+class _EnterButton extends StatefulWidget {
+  final VoidCallback onTap; const _EnterButton({required this.onTap});
+  @override State<_EnterButton> createState() => _EnterButtonState();
+}
+class _EnterButtonState extends State<_EnterButton> with SingleTickerProviderStateMixin {
+  late AnimationController _c; late Animation<double> _sc;
+  @override void initState() { super.initState();
+    _c=AnimationController(vsync:this,duration:const Duration(milliseconds:120));
+    _sc=Tween(begin:1.0,end:.94).animate(_c); }
+  @override void dispose() { _c.dispose(); super.dispose(); }
+  @override Widget build(BuildContext context) {
+    final d=_isDark(context);
+    return GestureDetector(onTapDown:(_)=>_c.forward(),onTapUp:(_){_c.reverse();widget.onTap();},onTapCancel:()=>_c.reverse(),
+      child:ScaleTransition(scale:_sc,child:Container(height:58,decoration:BoxDecoration(
+        gradient:LinearGradient(colors:[AC.peach(d),d?const Color(0xFFE8644A):const Color(0xFFFF8F7A)]),
+        borderRadius:BorderRadius.circular(30),
+        boxShadow:[BoxShadow(color:AC.peach(d).withOpacity(0.5),blurRadius:20,offset:const Offset(0,8))]),
+        child:Row(mainAxisAlignment:MainAxisAlignment.center,children:[
+          const Text('ENTER',style:TextStyle(color:Colors.white,fontSize:18,fontWeight:FontWeight.bold,letterSpacing:4)),
+          const SizedBox(width:10),
+          Container(width:28,height:28,decoration:BoxDecoration(color:Colors.white.withOpacity(0.25),shape:BoxShape.circle),
+            child:const Icon(Icons.arrow_forward_rounded,color:Colors.white,size:16))]))));
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// USER AVATAR
+// ═══════════════════════════════════════════════════════════════════════════
+class UserAvatar extends StatelessWidget {
+  final AppUser? user; final double size,fontSize;
+  const UserAvatar({super.key,required this.user,this.size=44,this.fontSize=18});
+  @override Widget build(BuildContext context) {
+    final d=_isDark(context);
+    if(user?.avatarBytes!=null) return Container(width:size,height:size,
+      decoration:BoxDecoration(shape:BoxShape.circle,boxShadow:[BoxShadow(color:AC.peach(d).withOpacity(0.3),blurRadius:8)]),
+      child:ClipOval(child:Image.memory(user!.avatarBytes!,fit:BoxFit.cover)));
+    if(user?.avatarEmoji!=null) return _shell(d,Text(user!.avatarEmoji!,style:TextStyle(fontSize:fontSize+4)));
+    return _shell(d,Text(user!=null?user!.username[0].toUpperCase():'👤',
+      style:TextStyle(color:Colors.white,fontSize:fontSize,fontWeight:FontWeight.bold)));
+  }
+  Widget _shell(bool d,Widget child) => Container(width:size,height:size,
+    decoration:BoxDecoration(gradient:LinearGradient(colors:[AC.peach(d),AC.sage(d)]),shape:BoxShape.circle,
+      boxShadow:[BoxShadow(color:AC.peach(d).withOpacity(0.3),blurRadius:8)]),
+    child:Center(child:child));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HOME
+// ═══════════════════════════════════════════════════════════════════════════
+class HomeScreen extends StatefulWidget {
+  const HomeScreen({super.key});
+  @override State<HomeScreen> createState() => _HomeScreenState();
+}
+class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin {
+  File? _file; Uint8List? _webB;
+  final _picker=ImagePicker();
+  late AnimationController _fC; late Animation<double> _fA;
+  bool get _has => _file!=null||_webB!=null;
+  ImageArg get _arg => ImageArg(file:_file,bytes:_webB);
+  @override void initState() { super.initState();
+    _fC=AnimationController(vsync:this,duration:const Duration(milliseconds:600));
+    _fA=CurvedAnimation(parent:_fC,curve:Curves.easeIn); _fC.forward();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final b=await AppStore.checkDailyBonus();
+      if(b&&mounted){ showDialog(context:context,builder:(_)=>_BonusDialog(coins:currentUser?.coins??1)); setState((){}); } }); }
+  @override void dispose() { _fC.dispose(); super.dispose(); }
+  Future<void> _photo(ImageSource src) async {
+    final x=await _picker.pickImage(source:src,imageQuality:85);
+    if(x==null)return;
+    if(kIsWeb){final b=await x.readAsBytes();setState((){_webB=b;_file=null;});}
+    else setState((){_file=File(x.path);_webB=null;}); }
+  void _clear() => setState((){_file=null;_webB=null;});
+
+  @override Widget build(BuildContext context) {
+    final d=_isDark(context); final sb=AC.softBrown(d); final lt=AC.lightText(d);
+    return Scaffold(body:Container(decoration:BoxDecoration(gradient:LinearGradient(
+        begin:Alignment.topCenter,end:Alignment.bottomCenter,
+        colors:d?[const Color(0xFF1A1612),const Color(0xFF1A1A2A)]:[const Color(0xFFFFF0E8),const Color(0xFFF5EEF8)])),
+      child:FadeTransition(opacity:_fA,child:SafeArea(child:Column(children:[
+        // Header
+        Padding(padding:const EdgeInsets.fromLTRB(24,20,24,8),child:Row(children:[
+          Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+            Text('AL-AGAP',style:TextStyle(fontSize:26,fontWeight:FontWeight.bold,color:sb,letterSpacing:3)),
+            Text('Rescue • Adopt • Report',style:TextStyle(fontSize:12,color:lt,letterSpacing:1.5)),
+          ]),
+          const Spacer(),
+          if(currentUser!=null) Container(margin:const EdgeInsets.only(right:8),
+            padding:const EdgeInsets.symmetric(horizontal:10,vertical:6),
+            decoration:BoxDecoration(color:AC.gold.withOpacity(0.15),borderRadius:BorderRadius.circular(20),
+              border:Border.all(color:AC.gold.withOpacity(0.4),width:1.5)),
+            child:Row(mainAxisSize:MainAxisSize.min,children:[
+              const Text('🪙',style:TextStyle(fontSize:14)),const SizedBox(width:4),
+              Text('${currentUser!.coins}',style:TextStyle(fontSize:13,fontWeight:FontWeight.bold,color:sb))])),
+          IconButton(icon:Icon(Icons.settings_outlined,color:sb,size:22),padding:EdgeInsets.zero,
+            onPressed:() async { await Navigator.pushNamed(context,'/settings'); setState((){}); }),
+          const SizedBox(width:6),
+          GestureDetector(onTap:() async { await Navigator.pushNamed(context,'/profile'); setState((){}); },
+            child:UserAvatar(user:currentUser,size:42,fontSize:17)),
+        ])),
+        // Body
+        Expanded(child:SingleChildScrollView(padding:const EdgeInsets.symmetric(horizontal:24),child:Column(children:[
+          const SizedBox(height:16),
+          _photoArea(d,sb,lt),
+          const SizedBox(height:24),
+          if(_has) _actions(d) else _hints(d),
+          const SizedBox(height:32),
+        ]))),
+      ])))));
+  }
+
+  Widget _photoArea(bool d,Color sb,Color lt) => GestureDetector(onTap:!_has?()=>_photo(ImageSource.camera):null,
+    child:AnimatedContainer(duration:const Duration(milliseconds:400),height:_has?300:260,width:double.infinity,
+      decoration:BoxDecoration(color:AC.card(d),borderRadius:BorderRadius.circular(28),
+        border:Border.all(color:_has?AC.sage(d):AC.peach(d).withOpacity(0.4),width:2),
+        boxShadow:[BoxShadow(color:AC.blush(d).withOpacity(0.3),blurRadius:20,offset:const Offset(0,8))]),
+      child:ClipRRect(borderRadius:BorderRadius.circular(26),child:_has
+        ?Stack(fit:StackFit.expand,children:[buildImage(_arg),
+            Positioned(top:12,right:12,child:GestureDetector(onTap:_clear,
+              child:Container(padding:const EdgeInsets.all(6),
+                decoration:BoxDecoration(color:Colors.white.withOpacity(0.85),shape:BoxShape.circle),
+                child:const Icon(Icons.close_rounded,size:18,color:Colors.black54))))])
+        :Column(mainAxisAlignment:MainAxisAlignment.center,children:[
+            Container(width:80,height:80,decoration:BoxDecoration(color:AC.blush(d).withOpacity(0.5),shape:BoxShape.circle),
+              child:Icon(Icons.camera_alt_rounded,size:38,color:AC.peach(d))),
+            const SizedBox(height:16),
+            Text('Take a Photo',style:TextStyle(fontSize:20,fontWeight:FontWeight.bold,color:AC.softBrown(d))),
+            const SizedBox(height:6),
+            Text('Tap to photograph an animal',style:TextStyle(fontSize:13,color:AC.lightText(d))),
+            const SizedBox(height:16),
+            GestureDetector(onTap:()=>_photo(ImageSource.gallery),
+              child:Container(padding:const EdgeInsets.symmetric(horizontal:18,vertical:8),
+                decoration:BoxDecoration(color:AC.sage(d).withOpacity(0.3),borderRadius:BorderRadius.circular(20)),
+                child:Text('or choose from gallery',style:TextStyle(fontSize:12,color:AC.mutedText(d)))))]))));
+
+  Widget _actions(bool d) => Column(children:[
+    Text('What would you like to do?',style:TextStyle(fontSize:16,fontWeight:FontWeight.w600,color:AC.mutedText(d),letterSpacing:0.5)),
+    const SizedBox(height:16),
+    Row(children:[
+      Expanded(child:_ACard(emoji:'🏠',label:'Adopt',sub:'Start the process',color:AC.sage(d),onTap:() async {
+        currentUser?.adoptionsCount++; await AppStore.save();
+        if(mounted) Navigator.pushNamed(context,'/adopt',arguments:_arg); })),
+      const SizedBox(width:14),
+      Expanded(child:_ACard(emoji:'📍',label:'Report',sub:'Find nearby help',color:AC.sky(d),onTap:() async {
+        currentUser?.reportsCount++; await AppStore.save();
+        if(mounted) Navigator.pushNamed(context,'/report',arguments:_arg); })),
+    ]),
+  ]);
+
+  Widget _hints(bool d) => Column(children:[
+    _HCard(emoji:'🏠',title:'Adopt an Animal',desc:'Learn legal steps, paperwork, and vet care.',color:AC.sage(d).withOpacity(0.3),d:d),
+    const SizedBox(height:12),
+    _HCard(emoji:'📍',title:'Report & Refer',desc:'Find nearby shelters and send them a photo.',color:AC.sky(d).withOpacity(0.3),d:d),
+  ]);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SETTINGS
+// ═══════════════════════════════════════════════════════════════════════════
+class SettingsScreen extends StatefulWidget {
+  const SettingsScreen({super.key});
+  @override State<SettingsScreen> createState() => _SettingsScreenState();
+}
+class _SettingsScreenState extends State<SettingsScreen> {
+  @override Widget build(BuildContext context) {
+    final d=_isDark(context); final sb=AC.softBrown(d);
+    return Scaffold(body:Container(decoration:BoxDecoration(gradient:LinearGradient(
+        begin:Alignment.topCenter,end:Alignment.bottomCenter,
+        colors:d?[const Color(0xFF1A1612),const Color(0xFF1A1A2A)]:[const Color(0xFFFFF0E8),const Color(0xFFF5EEF8)])),
+      child:SafeArea(child:Column(children:[
+        Padding(padding:const EdgeInsets.fromLTRB(16,16,24,8),child:Row(children:[
+          IconButton(onPressed:()=>Navigator.pop(context),icon:const Icon(Icons.arrow_back_ios_new_rounded),color:sb),
+          Text('Settings',style:TextStyle(fontSize:22,fontWeight:FontWeight.bold,color:sb)),
+        ])),
+        Expanded(child:ListView(padding:const EdgeInsets.all(20),children:[
+          _sec('Account',d),
+          _item(Icons.person_outline_rounded,'Profile',AC.peach(d).withOpacity(0.2),d,
+            ()async{await Navigator.pushNamed(context,'/profile');setState((){}); }),
+          const SizedBox(height:16),
+          _sec('Appearance',d),
+          _switch(Icons.dark_mode_outlined,'Dark Mode',AC.lavender(d).withOpacity(0.3),d,d,
+            (v){themeNotifier.value=v;appDarkMode=v;AppStore.save();setState((){}); }),
+          const SizedBox(height:16),
+          _sec('Info',d),
+          _item(Icons.info_outline_rounded,'About the App',AC.sky(d).withOpacity(0.3),d,()=>_about(context,d)),
+          const SizedBox(height:8),
+          _item(Icons.code_rounded,'About the Developer',AC.sage(d).withOpacity(0.3),d,()=>_dev(context,d)),
+          const SizedBox(height:32),
+          if(currentUser!=null) Center(child:GestureDetector(onTap:() async {
+            await AppStore.clear();currentUser=null;
+            if(mounted) Navigator.pushNamedAndRemoveUntil(context,'/auth',(r)=>false); },
+            child:Container(padding:const EdgeInsets.symmetric(horizontal:36,vertical:14),
+              decoration:BoxDecoration(color:Colors.redAccent.withOpacity(0.1),borderRadius:BorderRadius.circular(20),
+                border:Border.all(color:Colors.redAccent.withOpacity(0.4),width:1.5)),
+              child:const Row(mainAxisSize:MainAxisSize.min,children:[
+                Icon(Icons.logout_rounded,color:Colors.redAccent,size:18),SizedBox(width:8),
+                Text('Log Out',style:TextStyle(color:Colors.redAccent,fontWeight:FontWeight.bold,fontSize:15))])))),
+        ])),
+      ]))));
+  }
+
+  Widget _sec(String t,bool d) => Padding(padding:const EdgeInsets.only(bottom:8),
+    child:Text(t.toUpperCase(),style:TextStyle(fontSize:11,fontWeight:FontWeight.bold,color:AC.lightText(d),letterSpacing:2)));
+
+  Widget _item(IconData icon,String lbl,Color col,bool d,VoidCallback onTap) =>
+    GestureDetector(onTap:onTap,child:Container(margin:const EdgeInsets.only(bottom:8),
+      padding:const EdgeInsets.symmetric(horizontal:18,vertical:16),
+      decoration:BoxDecoration(color:col,borderRadius:BorderRadius.circular(16)),
+      child:Row(children:[Icon(icon,color:AC.softBrown(d),size:22),const SizedBox(width:14),
+        Text(lbl,style:TextStyle(fontSize:15,color:AC.softBrown(d),fontWeight:FontWeight.w500)),
+        const Spacer(),Icon(Icons.arrow_forward_ios_rounded,color:AC.lightText(d),size:14)])));
+
+  Widget _switch(IconData icon,String lbl,Color col,bool d,bool val,ValueChanged<bool> onChange) =>
+    Container(padding:const EdgeInsets.symmetric(horizontal:18,vertical:12),
+      decoration:BoxDecoration(color:col,borderRadius:BorderRadius.circular(16)),
+      child:Row(children:[Icon(icon,color:AC.softBrown(d),size:22),const SizedBox(width:14),
+        Text(lbl,style:TextStyle(fontSize:15,color:AC.softBrown(d),fontWeight:FontWeight.w500)),
+        const Spacer(),Switch(value:val,onChanged:onChange,activeColor:AC.peach(d))]));
+
+  void _about(BuildContext ctx,bool d) => showDialog(context:ctx,builder:(_)=>AlertDialog(
+    backgroundColor:AC.card(d),shape:RoundedRectangleBorder(borderRadius:BorderRadius.circular(24)),
+    title:Row(children:[const Text('🐾 ',style:TextStyle(fontSize:22)),
+      Text('AL-AGAP',style:TextStyle(color:AC.softBrown(d),fontWeight:FontWeight.bold))]),
+    content:Text('AL-AGAP connects stray animals with nearby shelters, vets, and adoption centers.\n\nTake a photo, then adopt or report.\n\nLog in daily to earn up to 100 coins/month! 🪙',
+      style:TextStyle(color:AC.mutedText(d),height:1.6,fontSize:14)),
+    actions:[TextButton(onPressed:()=>Navigator.pop(ctx),
+      child:Text('Close',style:TextStyle(color:AC.peach(d),fontWeight:FontWeight.bold)))]));
+
+  void _dev(BuildContext ctx,bool d) => showDialog(context:ctx,builder:(_)=>AlertDialog(
+    backgroundColor:AC.card(d),shape:RoundedRectangleBorder(borderRadius:BorderRadius.circular(24)),
+    title:Row(children:[const Text('👨‍💻 ',style:TextStyle(fontSize:22)),
+      Text('Developer',style:TextStyle(color:AC.softBrown(d),fontWeight:FontWeight.bold))]),
+    content:Text('AL-AGAP is built with ❤️ for the animals of the Philippines.\n\nContact: alagap.philippines@gmail.com\n\nBuilt with Flutter • OpenStreetMap • Overpass API • CARTO',
+      style:TextStyle(color:AC.mutedText(d),height:1.6,fontSize:14)),
+    actions:[TextButton(onPressed:()=>Navigator.pop(ctx),
+      child:Text('Close',style:TextStyle(color:AC.peach(d),fontWeight:FontWeight.bold)))]));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PROFILE
+// ═══════════════════════════════════════════════════════════════════════════
+class ProfileScreen extends StatefulWidget {
+  const ProfileScreen({super.key});
+  @override State<ProfileScreen> createState() => _ProfileScreenState();
+}
+class _ProfileScreenState extends State<ProfileScreen> {
+  late TextEditingController _un,_bio;
+  bool _editing=false;
+  final _picker=ImagePicker();
+  @override void initState() { super.initState();
+    _un=TextEditingController(text:currentUser?.username??'');
+    _bio=TextEditingController(text:currentUser?.bio??''); }
+  @override void dispose() { _un.dispose();_bio.dispose(); super.dispose(); }
+
+  Future<void> _pickPhoto(ImageSource src) async {
+    final x=await _picker.pickImage(source:src,imageQuality:60,maxWidth:512,maxHeight:512);
+    if(x==null)return;
+    final raw=await x.readAsBytes();
+    // Compress to prevent web lag — cap at 300KB
+    final compressed=await compressForStorage(raw);
+    setState((){currentUser?.avatarBytes=compressed;currentUser?.avatarEmoji=null;});
+    await AppStore.save();
+  }
+
+  void _showAvatarPicker() {
+    final d=_isDark(context);
+    showModalBottomSheet(context:context,backgroundColor:Colors.transparent,isScrollControlled:true,
+      builder:(_)=>DraggableScrollableSheet(initialChildSize:.55,minChildSize:.4,maxChildSize:.85,expand:false,
+        builder:(_,sc)=>Container(decoration:BoxDecoration(color:AC.card(d),
+            borderRadius:const BorderRadius.vertical(top:Radius.circular(28))),
+          child:ListView(controller:sc,padding:const EdgeInsets.fromLTRB(24,12,24,32),children:[
+            Center(child:Container(width:40,height:4,margin:const EdgeInsets.only(bottom:20),
+              decoration:BoxDecoration(color:Colors.grey.shade400,borderRadius:BorderRadius.circular(2)))),
+            Text('Choose Avatar',style:TextStyle(fontSize:18,fontWeight:FontWeight.bold,color:AC.softBrown(d))),
+            const SizedBox(height:20),
+            Row(children:[
+              Expanded(child:_ABtn(icon:Icons.photo_library_outlined,label:'Gallery',color:AC.sky(d),
+                onTap:(){Navigator.pop(context);_pickPhoto(ImageSource.gallery);})),
+              const SizedBox(width:12),
+              Expanded(child:_ABtn(icon:Icons.camera_alt_outlined,label:'Camera',color:AC.sage(d),
+                onTap:(){Navigator.pop(context);_pickPhoto(ImageSource.camera);})),
+            ]),
+            const SizedBox(height:20),
+            Text('Or pick an animal avatar:',style:TextStyle(fontSize:13,color:AC.lightText(d),fontStyle:FontStyle.italic)),
+            const SizedBox(height:12),
+            GridView.count(crossAxisCount:6,shrinkWrap:true,physics:const NeverScrollableScrollPhysics(),
+              crossAxisSpacing:8,mainAxisSpacing:8,
+              children:kPresetAvatars.map((e){
+                final sel=currentUser?.avatarEmoji==e&&currentUser?.avatarBytes==null;
+                return GestureDetector(onTap:() async {
+                  setState((){currentUser?.avatarEmoji=e;currentUser?.avatarBytes=null;});
+                  await AppStore.save(); if(mounted){Navigator.pop(context);setState((){}); }
+                },child:AnimatedContainer(duration:const Duration(milliseconds:150),
+                  decoration:BoxDecoration(
+                    color:sel?AC.peach(d).withOpacity(0.3):AC.cream(d),
+                    borderRadius:BorderRadius.circular(12),
+                    border:Border.all(color:sel?AC.peach(d):Colors.transparent,width:2)),
+                  child:Center(child:Text(e,style:const TextStyle(fontSize:24)))));
+              }).toList()),
+          ]))));
+  }
+
+  Future<void> _save() async {
+    if(currentUser!=null){
+      if(_un.text.trim().isNotEmpty) currentUser!.username=_un.text.trim();
+      currentUser!.bio=_bio.text.trim().isEmpty?null:_bio.text.trim();
+    }
+    await AppStore.save(); setState(()=>_editing=false);
+    if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content:const Text('Profile updated!'),backgroundColor:AC.sage(false),behavior:SnackBarBehavior.floating));
+  }
+
+  @override Widget build(BuildContext context) {
+    final d=_isDark(context); final sb=AC.softBrown(d); final lt=AC.lightText(d);
+    final user=currentUser;
+    return Scaffold(body:Container(decoration:BoxDecoration(gradient:LinearGradient(
+        begin:Alignment.topCenter,end:Alignment.bottomCenter,
+        colors:d?[const Color(0xFF1A1612),const Color(0xFF1A1A2A)]:[const Color(0xFFFFF0E8),const Color(0xFFF5EEF8)])),
+      child:SafeArea(child:Column(children:[
+        Padding(padding:const EdgeInsets.fromLTRB(16,16,24,0),child:Row(children:[
+          IconButton(onPressed:()=>Navigator.pop(context),icon:const Icon(Icons.arrow_back_ios_new_rounded),color:sb),
+          Text('My Profile',style:TextStyle(fontSize:22,fontWeight:FontWeight.bold,color:sb)),
+          const Spacer(),
+          if(!_editing) GestureDetector(onTap:()=>setState(()=>_editing=true),
+            child:Container(padding:const EdgeInsets.symmetric(horizontal:14,vertical:7),
+              decoration:BoxDecoration(color:AC.peach(d).withOpacity(0.15),borderRadius:BorderRadius.circular(20)),
+              child:Text('Edit',style:TextStyle(color:AC.peach(d),fontWeight:FontWeight.bold,fontSize:14))))
+          else GestureDetector(onTap:_save,
+            child:Container(padding:const EdgeInsets.symmetric(horizontal:14,vertical:7),
+              decoration:BoxDecoration(color:AC.sage(d).withOpacity(0.3),borderRadius:BorderRadius.circular(20)),
+              child:Text('Save',style:TextStyle(color:sb,fontWeight:FontWeight.bold,fontSize:14)))),
+        ])),
+        Expanded(child:SingleChildScrollView(padding:const EdgeInsets.all(24),child:Column(children:[
+          Stack(alignment:Alignment.bottomRight,children:[
+            UserAvatar(user:user,size:100,fontSize:42),
+            GestureDetector(onTap:_showAvatarPicker,
+              child:Container(width:32,height:32,
+                decoration:BoxDecoration(color:AC.peach(d),shape:BoxShape.circle,
+                  border:Border.all(color:Colors.white,width:2),
+                  boxShadow:[BoxShadow(color:AC.peach(d).withOpacity(0.3),blurRadius:8)]),
+                child:const Icon(Icons.edit_rounded,color:Colors.white,size:16))),
+          ]),
+          const SizedBox(height:12),
+          if(!_editing)...[
+            Text(user?.username??'Guest',style:TextStyle(fontSize:24,fontWeight:FontWeight.bold,color:sb)),
+            Text(user?.email??'',style:TextStyle(fontSize:14,color:lt)),
+            if(user?.bio!=null)...[const SizedBox(height:8),
+              Text(user!.bio!,textAlign:TextAlign.center,style:TextStyle(fontSize:14,color:AC.mutedText(d),fontStyle:FontStyle.italic))],
+          ],
+          const SizedBox(height:20),
+          // Monthly coin calendar
+          _Calendar(user:user,d:d),
+          const SizedBox(height:20),
+          if(_editing)...[
+            _pf(_un,'Username',Icons.person_outline_rounded,d),const SizedBox(height:14),
+            _pf(_bio,'Bio',Icons.edit_outlined,d,lines:3),const SizedBox(height:20),
+          ],
+          Row(children:[
+            Expanded(child:_SC(label:'Reports',val:'${user?.reportsCount??0}',emoji:'📍',col:AC.sky(d).withOpacity(0.4),d:d)),
+            const SizedBox(width:14),
+            Expanded(child:_SC(label:'Adoptions',val:'${user?.adoptionsCount??0}',emoji:'🏠',col:AC.sage(d).withOpacity(0.4),d:d)),
+          ]),
+          const SizedBox(height:32),
+        ]))),
+      ]))));
+  }
+
+  Widget _pf(TextEditingController c,String lbl,IconData icon,bool d,{int lines=1}) =>
+    TextField(controller:c,maxLines:lines,style:TextStyle(color:AC.mutedText(d),fontSize:15),
+      decoration:InputDecoration(labelText:lbl,labelStyle:TextStyle(color:AC.lightText(d),fontSize:14),
+        prefixIcon:Icon(icon,color:AC.lightText(d),size:20),
+        filled:true,fillColor:AC.card(d),
+        border:OutlineInputBorder(borderRadius:BorderRadius.circular(14),borderSide:BorderSide.none),
+        enabledBorder:OutlineInputBorder(borderRadius:BorderRadius.circular(14),borderSide:BorderSide(color:AC.blush(d),width:1.5)),
+        focusedBorder:OutlineInputBorder(borderRadius:BorderRadius.circular(14),borderSide:BorderSide(color:AC.peach(d),width:2)),
+        contentPadding:const EdgeInsets.symmetric(horizontal:16,vertical:14)));
+}
+
+class _Calendar extends StatelessWidget {
+  final AppUser? user; final bool d;
+  const _Calendar({required this.user,required this.d});
+  @override Widget build(BuildContext context) {
+    final now=DateTime.now();
+    final dim=DateUtils.getDaysInMonth(now.year,now.month);
+    final fw=DateTime(now.year,now.month,1).weekday%7;
+    final logged=user?.loggedDaysThisMonth??{};
+    final monthly=user?.monthlyCoins??0;
+    final sb=AC.softBrown(d); final lt=AC.lightText(d);
+    return Container(padding:const EdgeInsets.all(16),
+      decoration:BoxDecoration(
+        gradient:LinearGradient(colors:[AC.gold.withOpacity(0.1),AC.blush(d).withOpacity(0.15)]),
+        borderRadius:BorderRadius.circular(20),
+        border:Border.all(color:AC.gold.withOpacity(0.3),width:1.5)),
+      child:Column(children:[
+        Row(children:[const Text('🪙',style:TextStyle(fontSize:20)),const SizedBox(width:8),
+          Text('Monthly Coins',style:TextStyle(fontSize:15,fontWeight:FontWeight.bold,color:sb)),
+          const Spacer(),Text('$monthly / 100',style:TextStyle(fontSize:13,fontWeight:FontWeight.bold,color:lt))]),
+        const SizedBox(height:8),
+        ClipRRect(borderRadius:BorderRadius.circular(4),child:LinearProgressIndicator(
+          value:monthly/100,minHeight:6,backgroundColor:AC.blush(d).withOpacity(0.3),
+          valueColor:const AlwaysStoppedAnimation<Color>(AC.gold))),
+        const SizedBox(height:12),
+        Row(mainAxisAlignment:MainAxisAlignment.spaceAround,
+          children:['S','M','T','W','T','F','S'].map((x)=>SizedBox(width:28,
+            child:Text(x,textAlign:TextAlign.center,style:TextStyle(fontSize:10,fontWeight:FontWeight.bold,color:lt)))).toList()),
+        const SizedBox(height:4),
+        GridView.builder(shrinkWrap:true,physics:const NeverScrollableScrollPhysics(),
+          gridDelegate:const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount:7,mainAxisSpacing:4,crossAxisSpacing:4),
+          itemCount:fw+dim,
+          itemBuilder:(_,i){ if(i<fw) return const SizedBox.shrink();
+            final day=i-fw+1; final isL=logged.contains(day);
+            final isT=day==now.day; final isP=day<now.day;
+            return Container(decoration:BoxDecoration(
+              color:isL?AC.gold.withOpacity(0.8):isT?AC.peach(d).withOpacity(0.4):isP?AC.cream(d):Colors.transparent,
+              borderRadius:BorderRadius.circular(6),
+              border:isT?Border.all(color:AC.peach(d),width:1.5):null),
+              child:Center(child:Text('$day',style:TextStyle(fontSize:10,
+                fontWeight:isT?FontWeight.bold:FontWeight.normal,
+                color:isL?Colors.white:sb)))); }),
+      ]));
+  }
+}
+
+class _ABtn extends StatelessWidget {
+  final IconData icon; final String label; final Color color; final VoidCallback onTap;
+  const _ABtn({required this.icon,required this.label,required this.color,required this.onTap});
+  @override Widget build(BuildContext ctx) => GestureDetector(onTap:onTap,
+    child:Container(padding:const EdgeInsets.symmetric(vertical:14),
+      decoration:BoxDecoration(color:color.withOpacity(0.4),borderRadius:BorderRadius.circular(14),border:Border.all(color:color,width:1.5)),
+      child:Column(children:[Icon(icon,color:AC.softBrown(false),size:26),const SizedBox(height:6),
+        Text(label,style:TextStyle(fontSize:13,fontWeight:FontWeight.w600,color:AC.softBrown(false)))])));
+}
+class _SC extends StatelessWidget {
+  final String label,val,emoji; final Color col; final bool d;
+  const _SC({required this.label,required this.val,required this.emoji,required this.col,required this.d});
+  @override Widget build(BuildContext ctx) => Container(padding:const EdgeInsets.symmetric(vertical:18,horizontal:16),
+    decoration:BoxDecoration(color:col,borderRadius:BorderRadius.circular(18)),
+    child:Column(children:[Text(emoji,style:const TextStyle(fontSize:28)),const SizedBox(height:8),
+      Text(val,style:TextStyle(fontSize:28,fontWeight:FontWeight.bold,color:AC.softBrown(d))),
+      const SizedBox(height:4),Text(label,style:TextStyle(fontSize:12,color:AC.lightText(d)))]));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ADOPT
+// ═══════════════════════════════════════════════════════════════════════════
+class AdoptScreen extends StatelessWidget {
+  const AdoptScreen({super.key});
+  @override Widget build(BuildContext context) {
+    final arg=ModalRoute.of(context)?.settings.arguments as ImageArg?;
+    final d=_isDark(context); final sb=AC.softBrown(d);
+    final steps=[
+      _Stp('01','🩺','Visit a Veterinarian','Licensed vet exam, health certificate, microchip check.',AC.blush(d)),
+      _Stp('02','📋','Register the Animal','City hall registration with valid ID and vet certificate.',AC.sage(d).withOpacity(0.6)),
+      _Stp('03','💉','Vaccinations & Deworming','Anti-rabies, distemper, and deworming as advised.',AC.sky(d).withOpacity(0.6)),
+      _Stp('04','📝','Adoption Papers','Shelter adoption agreement with home inspection consent.',AC.lavender(d).withOpacity(0.6)),
+      _Stp('05','🏡','Prepare Your Home','Safe space with food, water, bedding. Animal-proof zones.',AC.peach(d).withOpacity(0.5)),
+      _Stp('06','💛','Ongoing Healthcare','Vet check-ups every 6 months. Updated vaccination records.',AC.sage(d).withOpacity(0.4)),
+    ];
+    return Scaffold(body:Container(decoration:BoxDecoration(gradient:LinearGradient(
+        begin:Alignment.topCenter,end:Alignment.bottomCenter,
+        colors:d?[const Color(0xFF1A1612),const Color(0xFF1A2A1A)]:[const Color(0xFFFFF0E8),const Color(0xFFEEF8F2)])),
+      child:SafeArea(child:Column(children:[
+        Padding(padding:const EdgeInsets.fromLTRB(16,16,24,0),child:Row(children:[
+          IconButton(onPressed:()=>Navigator.pop(context),icon:const Icon(Icons.arrow_back_ios_new_rounded),color:sb),
+          Text('Adopt an Animal',style:TextStyle(fontSize:22,fontWeight:FontWeight.bold,color:sb)),
+        ])),
+        Expanded(child:ListView(padding:const EdgeInsets.all(20),children:[
+          if(arg!=null&&arg.hasImage) Container(height:180,margin:const EdgeInsets.only(bottom:20),
+            decoration:BoxDecoration(borderRadius:BorderRadius.circular(20),
+              boxShadow:[BoxShadow(color:AC.peach(d).withOpacity(0.3),blurRadius:16,offset:const Offset(0,6))]),
+            child:ClipRRect(borderRadius:BorderRadius.circular(20),child:buildImage(arg))),
+          Container(padding:const EdgeInsets.all(16),margin:const EdgeInsets.only(bottom:20),
+            decoration:BoxDecoration(color:AC.blush(d).withOpacity(0.5),borderRadius:BorderRadius.circular(16)),
+            child:Row(children:[const Text('🐶',style:TextStyle(fontSize:28)),const SizedBox(width:12),
+              Expanded(child:Text('Follow these steps for a safe and legal adoption.',
+                style:TextStyle(fontSize:13,color:AC.mutedText(d),height:1.5)))])),
+          ...steps.map((s)=>Container(margin:const EdgeInsets.only(bottom:14),padding:const EdgeInsets.all(18),
+            decoration:BoxDecoration(color:s.col,borderRadius:BorderRadius.circular(18),
+              boxShadow:[BoxShadow(color:Colors.black.withOpacity(0.04),blurRadius:8,offset:const Offset(0,3))]),
+            child:Row(crossAxisAlignment:CrossAxisAlignment.start,children:[
+              Column(children:[Text(s.icon,style:const TextStyle(fontSize:28)),const SizedBox(height:4),
+                Text(s.num,style:TextStyle(fontSize:11,fontWeight:FontWeight.bold,color:AC.lightText(d),letterSpacing:1))]),
+              const SizedBox(width:16),
+              Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+                Text(s.title,style:TextStyle(fontSize:16,fontWeight:FontWeight.bold,color:sb)),
+                const SizedBox(height:6),Text(s.desc,style:TextStyle(fontSize:13,color:AC.mutedText(d),height:1.5)),
+              ])),
+            ]))),
+          const SizedBox(height:12),
+        ])),
+      ]))));
+  }
+}
+class _Stp { final String num,icon,title,desc; final Color col; _Stp(this.num,this.icon,this.title,this.desc,this.col); }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// REPORT — CARTO tiles, Overpass API, search+history, radius slider
+//          LayoutBuilder ensures ZERO overflow in any orientation
+// ═══════════════════════════════════════════════════════════════════════════
+class ReportScreen extends StatefulWidget {
+  const ReportScreen({super.key});
+  @override State<ReportScreen> createState() => _ReportScreenState();
+}
+class _ReportScreenState extends State<ReportScreen> {
+  LatLng? _loc; bool _locating=true; String _locErr='';
+  double _radius=10.0; List<OrgPin> _orgs=[]; bool _fetching=false; OrgPin? _sel;
+  final _sc=TextEditingController();
+  bool _showS=false,_searching=false;
+  List<OrgPin> _sResults=[]; List<String> _sHist=[];
+
+  @override void initState() { super.initState(); _init(); }
+  @override void dispose() { _sc.dispose(); super.dispose(); }
+
+  Future<void> _init() async {
+    final h=await AppStore.getSearchHistory(); setState(()=>_sHist=h);
+    await _getLoc(); }
+
+  Future<void> _getLoc() async {
+    setState((){_locating=true;_locErr='';});
+    try {
+      if(!await Geolocator.isLocationServiceEnabled()){ setState((){_locating=false;_locErr='Location services disabled.'; }); return; }
+      var p=await Geolocator.checkPermission();
+      if(p==LocationPermission.denied) p=await Geolocator.requestPermission();
+      if(p==LocationPermission.denied||p==LocationPermission.deniedForever){ setState((){_locating=false;_locErr='Location permission denied.'; }); return; }
+      final pos=await Geolocator.getCurrentPosition(desiredAccuracy:LocationAccuracy.high);
+      setState((){_loc=LatLng(pos.latitude,pos.longitude);_locating=false; });
+      await _fetchOrgs();
+    } catch(e){ setState((){_locating=false;_locErr='Could not get location: $e'; }); }
+  }
+
+  Future<void> _fetchOrgs() async {
+    if(_loc==null)return; setState(()=>_fetching=true);
+    final o=await fetchOverpassOrgs(_loc!,_radius);
+    setState((){_orgs=o;_fetching=false; }); }
+
+  Future<void> _doSearch(String q) async {
+    if(q.trim().isEmpty)return;
+    await AppStore.addSearch(q);
+    final h=await AppStore.getSearchHistory();
+    setState((){_searching=true;_sHist=h; });
+    final r=await searchNominatim(q,_loc);
+    setState((){_sResults=r;_searching=false; }); }
+
+  Future<void> _email(OrgPin o) async {
+    final sub=Uri.encodeComponent('Animal Report - AL-AGAP');
+    final body=Uri.encodeComponent('Hello,\n\nReporting stray animal at (${_loc?.latitude.toStringAsFixed(5)}, ${_loc?.longitude.toStringAsFixed(5)}).\n\nVia AL-AGAP.\n\nThank you.');
+    final uri=Uri.parse('mailto:?subject=$sub&body=$body');
+    if(await canLaunchUrl(uri)) await launchUrl(uri); else _snack('Could not open email.'); }
+
+  Future<void> _sms(OrgPin o) async {
+    final body=Uri.encodeComponent('Hi! Found stray animal near ${_loc?.latitude.toStringAsFixed(5)},${_loc?.longitude.toStringAsFixed(5)}. Via AL-AGAP.');
+    final phone=o.phone??'';
+    final uri=Uri.parse('sms:$phone?body=$body');
+    if(await canLaunchUrl(uri)) await launchUrl(uri); else _snack('SMS not supported on web.'); }
+
+  void _snack(String m) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(m)));
+
+  void _sheet(OrgPin o) { setState(()=>_sel=o);
+    showModalBottomSheet(context:context,backgroundColor:Colors.transparent,isScrollControlled:true,
+      builder:(_)=>_OrgSheet(org:o,dark:_isDark(context),
+        onEmail:(){Navigator.pop(context);_email(o);},
+        onSMS:(){Navigator.pop(context);_sms(o);},
+        onWeb:o.website!=null?(){Navigator.pop(context);launchUrl(Uri.parse(o.website!),mode:LaunchMode.externalApplication);}:null)); }
+
+  List<OrgPin> get _disp => _showS&&_sResults.isNotEmpty?_sResults:_orgs;
+
+  @override Widget build(BuildContext context) {
+    final arg=ModalRoute.of(context)?.settings.arguments as ImageArg?;
+    final d=_isDark(context); final sb=AC.softBrown(d); final lt=AC.lightText(d);
+
+    return Scaffold(body:Container(decoration:BoxDecoration(gradient:LinearGradient(
+        begin:Alignment.topCenter,end:Alignment.bottomCenter,
+        colors:d?[const Color(0xFF1A1612),const Color(0xFF1A1A2A)]:[const Color(0xFFF0F8FF),const Color(0xFFF5EEF8)])),
+      // LayoutBuilder measures exact available space — eliminates all overflow
+      child:SafeArea(child:LayoutBuilder(builder:(ctx,cons){
+        final totalH=cons.maxHeight;
+        const headerH=50.0;
+        final searchH=_showS?90.0:0.0;
+        final photoH=(arg!=null&&arg.hasImage)?82.0:0.0;
+        const radiusH=46.0;
+        const orgH=148.0; // hard cap
+        final mapH=(totalH-headerH-searchH-photoH-radiusH-orgH).clamp(80.0,double.infinity);
+
+        return Column(children:[
+
+          // Header
+          SizedBox(height:headerH,child:Padding(padding:const EdgeInsets.fromLTRB(12,8,12,4),
+            child:Row(children:[
+              IconButton(onPressed:()=>Navigator.pop(context),icon:const Icon(Icons.arrow_back_ios_new_rounded),color:sb,padding:EdgeInsets.zero,constraints:const BoxConstraints()),
+              const SizedBox(width:4),
+              Text('Report Animal',style:TextStyle(fontSize:18,fontWeight:FontWeight.bold,color:sb)),
+              const Spacer(),
+              IconButton(icon:Icon(_showS?Icons.close:Icons.search,color:sb),padding:EdgeInsets.zero,constraints:const BoxConstraints(),
+                onPressed:()=>setState((){_showS=!_showS;if(!_showS){_sResults=[];_sc.clear();} })),
+            ]))),
+
+          // Search bar
+          if(_showS) SizedBox(height:searchH,child:Padding(padding:const EdgeInsets.fromLTRB(16,0,16,4),
+            child:Column(mainAxisSize:MainAxisSize.min,children:[
+              TextField(controller:_sc,style:TextStyle(color:AC.mutedText(d),fontSize:13),
+                decoration:InputDecoration(hintText:'Search shelters, vets, orgs...',hintStyle:TextStyle(color:lt,fontSize:12),
+                  prefixIcon:Icon(Icons.search,color:lt,size:18),
+                  filled:true,fillColor:AC.card(d),
+                  border:OutlineInputBorder(borderRadius:BorderRadius.circular(12),borderSide:BorderSide.none),
+                  contentPadding:const EdgeInsets.symmetric(horizontal:12,vertical:8)),
+                onSubmitted:_doSearch),
+              const SizedBox(height:4),
+              if(_sHist.isNotEmpty&&_sResults.isEmpty&&!_searching)
+                SizedBox(height:30,child:ListView.separated(scrollDirection:Axis.horizontal,
+                  itemCount:_sHist.length,separatorBuilder:(_,__)=>const SizedBox(width:6),
+                  itemBuilder:(_,i)=>GestureDetector(onTap:()=>_doSearch(_sHist[i]),
+                    child:Container(padding:const EdgeInsets.symmetric(horizontal:10,vertical:3),
+                      decoration:BoxDecoration(color:AC.blush(d).withOpacity(0.4),borderRadius:BorderRadius.circular(20)),
+                      child:Text(_sHist[i],style:TextStyle(fontSize:11,color:sb)))))),
+            ]))),
+
+          // Photo strip
+          if(arg!=null&&arg.hasImage) SizedBox(height:photoH,
+            child:Padding(padding:const EdgeInsets.fromLTRB(16,0,16,6),
+              child:ClipRRect(borderRadius:BorderRadius.circular(12),child:buildImage(arg)))),
+
+          // Radius slider
+          SizedBox(height:radiusH,child:Padding(padding:const EdgeInsets.symmetric(horizontal:16),
+            child:Row(children:[
+              Text('Radius:',style:TextStyle(fontSize:11,color:lt)),
+              const SizedBox(width:6),
+              Expanded(child:SliderTheme(data:SliderThemeData(trackHeight:3,
+                  thumbShape:const RoundSliderThumbShape(enabledThumbRadius:7),
+                  overlayShape:const RoundSliderOverlayShape(overlayRadius:12)),
+                child:Slider(value:_radius,min:10,max:100,divisions:9,
+                  activeColor:AC.peach(d),inactiveColor:AC.blush(d).withOpacity(0.4),
+                  onChanged:(v)=>setState(()=>_radius=v),
+                  onChangeEnd:(_)=>_fetchOrgs()))),
+              Text('${_radius.toInt()} km',style:TextStyle(fontSize:11,color:lt,fontWeight:FontWeight.bold)),
+              if(_fetching) Padding(padding:const EdgeInsets.only(left:6),
+                child:SizedBox(width:12,height:12,child:CircularProgressIndicator(strokeWidth:2,color:AC.peach(d)))),
+            ]))),
+
+          // Map
+          SizedBox(height:mapH,child:Padding(padding:const EdgeInsets.symmetric(horizontal:16),
+            child:ClipRRect(borderRadius:BorderRadius.circular(18),
+              child:_locating?_loadW(d):_locErr.isNotEmpty?_errW(d)
+                :FlutterMap(
+                  options:MapOptions(initialCenter:_loc!,initialZoom:14-math.log(_radius/10)/math.log(2)),
+                  children:[
+                    TileLayer(urlTemplate:'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+                      subdomains:const['a','b','c','d'],userAgentPackageName:'com.alagap.app',maxZoom:20),
+                    RichAttributionWidget(animationConfig:const ScaleRAWA(),attributions:[
+                      TextSourceAttribution('© OpenStreetMap contributors',onTap:()=>launchUrl(Uri.parse('https://openstreetmap.org/copyright'),mode:LaunchMode.externalApplication)),
+                      TextSourceAttribution('© CARTO',onTap:()=>launchUrl(Uri.parse('https://carto.com/attributions'),mode:LaunchMode.externalApplication)),
+                    ]),
+                    MarkerLayer(markers:[
+                      Marker(point:_loc!,width:40,height:40,child:Container(
+                        decoration:BoxDecoration(color:AC.peach(d),shape:BoxShape.circle,
+                          border:Border.all(color:Colors.white,width:3),
+                          boxShadow:[BoxShadow(color:AC.peach(d).withOpacity(0.5),blurRadius:10)]),
+                        child:const Icon(Icons.person_pin_rounded,color:Colors.white,size:20))),
+                      ..._disp.map((o)=>Marker(point:o.position,width:46,height:46,
+                        child:GestureDetector(onTap:()=>_sheet(o),
+                          child:AnimatedContainer(duration:const Duration(milliseconds:200),
+                            decoration:BoxDecoration(
+                              color:_sel==o?AC.softBrown(d):o.pinColor(d),shape:BoxShape.circle,
+                              border:Border.all(color:_sel==o?Colors.white:AC.peach(d),width:2),
+                              boxShadow:[BoxShadow(color:Colors.black.withOpacity(0.15),blurRadius:8,offset:const Offset(0,3))]),
+                            child:Center(child:Text(o.emoji,style:const TextStyle(fontSize:20))))))),
+                    ]),
+                  ])))),
+
+          // Org list — hard-bounded ConstrainedBox, Flexible child
+          ConstrainedBox(constraints:const BoxConstraints(maxHeight:orgH),
+            child:Column(mainAxisSize:MainAxisSize.min,crossAxisAlignment:CrossAxisAlignment.start,children:[
+              Padding(padding:const EdgeInsets.fromLTRB(16,6,16,4),
+                child:Text(_showS&&_sResults.isNotEmpty?'Search Results':'Nearby Organizations',
+                  style:TextStyle(fontSize:12,fontWeight:FontWeight.bold,color:sb))),
+              Flexible(child:_locating?const SizedBox():ListView.separated(
+                padding:const EdgeInsets.fromLTRB(16,0,16,8),
+                scrollDirection:Axis.horizontal,
+                itemCount:_disp.length,
+                separatorBuilder:(_,__)=>const SizedBox(width:8),
+                itemBuilder:(_,i){ final o=_disp[i]; final sel=_sel==o;
+                  return GestureDetector(onTap:()=>_sheet(o),
+                    child:AnimatedContainer(duration:const Duration(milliseconds:200),
+                      width:115,padding:const EdgeInsets.all(9),
+                      decoration:BoxDecoration(
+                        color:sel?o.pinColor(d).withOpacity(0.9):o.pinColor(d).withOpacity(0.5),
+                        borderRadius:BorderRadius.circular(13),
+                        border:Border.all(color:sel?AC.softBrown(d).withOpacity(0.5):Colors.transparent,width:2)),
+                      child:Column(crossAxisAlignment:CrossAxisAlignment.start,mainAxisAlignment:MainAxisAlignment.center,children:[
+                        Text(o.emoji,style:const TextStyle(fontSize:18)),const SizedBox(height:3),
+                        Text(o.name,maxLines:2,overflow:TextOverflow.ellipsis,
+                          style:TextStyle(fontSize:10,fontWeight:FontWeight.bold,color:sb)),
+                        Text(o.typeLabel,maxLines:1,overflow:TextOverflow.ellipsis,
+                          style:TextStyle(fontSize:9,color:lt)),
+                        Text(o.distanceLabel,style:TextStyle(fontSize:9,color:lt)),
+                        const SizedBox(height:3),
+                        Container(padding:const EdgeInsets.symmetric(horizontal:6,vertical:2),
+                          decoration:BoxDecoration(color:Colors.white.withOpacity(0.6),borderRadius:BorderRadius.circular(8)),
+                          child:Text('Contact',style:TextStyle(fontSize:9,fontWeight:FontWeight.bold,color:sb))),
+                      ]))); })),
+            ])),
+
+        ]);
+      }))));
+  }
+
+  Widget _loadW(bool d) => Container(color:AC.sky(d).withOpacity(0.2),child:Center(child:Column(mainAxisSize:MainAxisSize.min,children:[
+    CircularProgressIndicator(color:AC.peach(d)),const SizedBox(height:12),
+    Text('Getting your location...',style:TextStyle(color:AC.mutedText(d)))])));
+
+  Widget _errW(bool d) => Container(color:AC.blush(d).withOpacity(0.3),child:Center(child:Padding(padding:const EdgeInsets.all(24),
+    child:Column(mainAxisSize:MainAxisSize.min,children:[
+      const Text('📍',style:TextStyle(fontSize:40)),const SizedBox(height:12),
+      Text(_locErr,textAlign:TextAlign.center,style:TextStyle(color:AC.mutedText(d))),const SizedBox(height:16),
+      GestureDetector(onTap:_getLoc,child:Container(padding:const EdgeInsets.symmetric(horizontal:20,vertical:10),
+        decoration:BoxDecoration(color:AC.peach(d),borderRadius:BorderRadius.circular(20)),
+        child:const Text('Retry',style:TextStyle(color:Colors.white,fontWeight:FontWeight.bold))))]))));
+}
+
+// ─── Org Bottom Sheet ─────────────────────────────────────────────────────
+class _OrgSheet extends StatelessWidget {
+  final OrgPin org; final bool dark;
+  final VoidCallback onEmail,onSMS; final VoidCallback? onWeb;
+  const _OrgSheet({required this.org,required this.dark,required this.onEmail,required this.onSMS,this.onWeb});
+  @override Widget build(BuildContext ctx) {
+    final sb=AC.softBrown(dark); final lt=AC.lightText(dark); final mt=AC.mutedText(dark);
+    return Container(margin:const EdgeInsets.all(16),padding:const EdgeInsets.all(24),
+      decoration:BoxDecoration(color:AC.card(dark),borderRadius:BorderRadius.circular(28),
+        boxShadow:[BoxShadow(color:Colors.black.withOpacity(0.15),blurRadius:20,offset:const Offset(0,-4))]),
+      child:Column(mainAxisSize:MainAxisSize.min,children:[
+        Container(width:40,height:4,decoration:BoxDecoration(color:Colors.grey.shade400,borderRadius:BorderRadius.circular(2))),
+        const SizedBox(height:20),
+        Row(children:[
+          Container(width:56,height:56,decoration:BoxDecoration(color:org.pinColor(dark),borderRadius:BorderRadius.circular(16)),
+            child:Center(child:Text(org.emoji,style:const TextStyle(fontSize:28)))),
+          const SizedBox(width:16),
+          Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+            Text(org.name,style:TextStyle(fontSize:16,fontWeight:FontWeight.bold,color:sb),maxLines:2,overflow:TextOverflow.ellipsis),
+            const SizedBox(height:3),
+            Text(org.typeLabel,style:TextStyle(fontSize:13,color:lt)),
+            Text('📍 ${org.distanceLabel} away',style:TextStyle(fontSize:12,color:lt)),
+            if(org.phone!=null) Text('📞 ${org.phone}',style:TextStyle(fontSize:11,color:mt)),
+          ])),
+        ]),
+        const SizedBox(height:20),
+        Text('Send animal report via:',style:TextStyle(fontSize:14,color:mt,fontWeight:FontWeight.w500)),
+        const SizedBox(height:14),
+        // Contact buttons — IntrinsicHeight + Row prevents overflow
+        IntrinsicHeight(child:Row(children:[
+          Expanded(child:_CB(icon:Icons.email_rounded,label:'Email',color:AC.sky(dark),dark:dark,onTap:onEmail)),
+          const SizedBox(width:10),
+          Expanded(child:_CB(icon:Icons.sms_rounded,label:'SMS',color:AC.sage(dark),dark:dark,onTap:onSMS)),
+          if(onWeb!=null)...[const SizedBox(width:10),
+            Expanded(child:_CB(icon:Icons.language_rounded,label:'Website',color:AC.lavender(dark),dark:dark,onTap:onWeb!))],
+        ])),
+        const SizedBox(height:8),
+      ]));
+  }
+}
+
+class _CB extends StatelessWidget {
+  final IconData icon; final String label; final Color color; final bool dark; final VoidCallback onTap;
+  const _CB({required this.icon,required this.label,required this.color,required this.dark,required this.onTap});
+  @override Widget build(BuildContext ctx) => GestureDetector(onTap:onTap,
+    child:Container(padding:const EdgeInsets.symmetric(vertical:12,horizontal:8),
+      decoration:BoxDecoration(color:color.withOpacity(0.35),borderRadius:BorderRadius.circular(16),border:Border.all(color:color,width:1.5)),
+      child:Column(mainAxisSize:MainAxisSize.min,children:[
+        Icon(icon,color:AC.softBrown(dark),size:24),const SizedBox(height:4),
+        Text(label,style:TextStyle(fontWeight:FontWeight.bold,color:AC.softBrown(dark),fontSize:12),textAlign:TextAlign.center)])));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SHARED SMALL WIDGETS
+// ═══════════════════════════════════════════════════════════════════════════
+class _ACard extends StatefulWidget {
+  final String emoji,label,sub; final Color color; final VoidCallback onTap;
+  const _ACard({required this.emoji,required this.label,required this.sub,required this.color,required this.onTap});
+  @override State<_ACard> createState() => _ACardState();
+}
+class _ACardState extends State<_ACard> with SingleTickerProviderStateMixin {
+  late AnimationController _c; late Animation<double> _sc;
+  @override void initState() { super.initState();
+    _c=AnimationController(vsync:this,duration:const Duration(milliseconds:120));
+    _sc=Tween(begin:1.0,end:.95).animate(_c); }
+  @override void dispose() { _c.dispose(); super.dispose(); }
+  @override Widget build(BuildContext ctx) { final d=_isDark(ctx);
+    return GestureDetector(onTapDown:(_)=>_c.forward(),onTapUp:(_){_c.reverse();widget.onTap();},onTapCancel:()=>_c.reverse(),
+      child:ScaleTransition(scale:_sc,child:Container(padding:const EdgeInsets.all(20),
+        decoration:BoxDecoration(color:widget.color,borderRadius:BorderRadius.circular(22),
+          boxShadow:[BoxShadow(color:widget.color.withOpacity(0.4),blurRadius:14,offset:const Offset(0,6))]),
+        child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+          Text(widget.emoji,style:const TextStyle(fontSize:32)),const SizedBox(height:10),
+          Text(widget.label,style:TextStyle(fontSize:18,fontWeight:FontWeight.bold,color:AC.softBrown(d))),
+          const SizedBox(height:4),Text(widget.sub,style:TextStyle(fontSize:12,color:AC.mutedText(d))),
+        ])))); }
+}
+
+class _HCard extends StatelessWidget {
+  final String emoji,title,desc; final Color color; final bool d;
+  const _HCard({required this.emoji,required this.title,required this.desc,required this.color,required this.d});
+  @override Widget build(BuildContext ctx) => Container(padding:const EdgeInsets.all(18),
+    decoration:BoxDecoration(color:color,borderRadius:BorderRadius.circular(18)),
+    child:Row(children:[Text(emoji,style:const TextStyle(fontSize:28)),const SizedBox(width:14),
+      Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+        Text(title,style:TextStyle(fontWeight:FontWeight.bold,color:AC.softBrown(d),fontSize:15)),
+        const SizedBox(height:3),Text(desc,style:TextStyle(fontSize:12,color:AC.mutedText(d))),
+      ]))]));
+}

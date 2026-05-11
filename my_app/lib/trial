@@ -1,0 +1,480 @@
+import 'package:flutter/material.dart';
+
+void main() {
+  runApp(const TicTacToeApp());
+}
+
+class TicTacToeApp extends StatelessWidget {
+  const TicTacToeApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Tic Tac Toe',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF1A1A2E),
+          brightness: Brightness.dark,
+        ),
+        useMaterial3: true,
+        fontFamily: 'monospace',
+      ),
+      home: const TicTacToeGame(),
+    );
+  }
+}
+
+class TicTacToeGame extends StatefulWidget {
+  const TicTacToeGame({super.key});
+
+  @override
+  State<TicTacToeGame> createState() => _TicTacToeGameState();
+}
+
+class _TicTacToeGameState extends State<TicTacToeGame>
+    with TickerProviderStateMixin {
+  // Board: 0 = empty, 1 = X, 2 = O
+  List<int> board = List.filled(9, 0);
+  int currentPlayer = 1; // 1 = X, 2 = O
+  int? winner; // null = ongoing, 0 = draw, 1 = X wins, 2 = O wins
+  List<int> winningCells = [];
+  int xScore = 0;
+  int oScore = 0;
+  int draws = 0;
+
+  late List<AnimationController> _cellControllers;
+  late List<Animation<double>> _cellAnimations;
+
+  @override
+  void initState() {
+    super.initState();
+    _initAnimations();
+  }
+
+  void _initAnimations() {
+    _cellControllers = List.generate(
+      9,
+      (i) => AnimationController(
+        duration: const Duration(milliseconds: 300),
+        vsync: this,
+      ),
+    );
+    _cellAnimations = _cellControllers
+        .map(
+          (ctrl) => CurvedAnimation(parent: ctrl, curve: Curves.elasticOut),
+        )
+        .toList();
+  }
+
+  @override
+  void dispose() {
+    for (var ctrl in _cellControllers) {
+      ctrl.dispose();
+    }
+    super.dispose();
+  }
+
+  void _resetBoard() {
+    setState(() {
+      board = List.filled(9, 0);
+      currentPlayer = 1;
+      winner = null;
+      winningCells = [];
+    });
+    for (var ctrl in _cellControllers) {
+      ctrl.reset();
+    }
+  }
+
+  void _resetAll() {
+    setState(() {
+      xScore = 0;
+      oScore = 0;
+      draws = 0;
+    });
+    _resetBoard();
+  }
+
+  void _handleTap(int index) {
+    if (board[index] != 0 || winner != null) return;
+
+    setState(() {
+      board[index] = currentPlayer;
+    });
+
+    _cellControllers[index].forward();
+
+    final result = _checkWinner();
+    if (result != null) {
+      setState(() {
+        winner = result;
+        if (result == 1) xScore++;
+        if (result == 2) oScore++;
+        if (result == 0) draws++;
+      });
+    } else {
+      setState(() {
+        currentPlayer = currentPlayer == 1 ? 2 : 1;
+      });
+    }
+  }
+
+  int? _checkWinner() {
+    const lines = [
+      [0, 1, 2],
+      [3, 4, 5],
+      [6, 7, 8], // rows
+      [0, 3, 6],
+      [1, 4, 7],
+      [2, 5, 8], // cols
+      [0, 4, 8],
+      [2, 4, 6], // diagonals
+    ];
+
+    for (final line in lines) {
+      final a = line[0], b = line[1], c = line[2];
+      if (board[a] != 0 && board[a] == board[b] && board[b] == board[c]) {
+        winningCells = line;
+        return board[a];
+      }
+    }
+
+    if (!board.contains(0)) return 0; // draw
+    return null;
+  }
+
+  String get _statusText {
+    if (winner == null) {
+      return currentPlayer == 1 ? "X's Turn" : "O's Turn";
+    } else if (winner == 0) {
+      return "It's a Draw!";
+    } else {
+      return winner == 1 ? "X Wins! 🎉" : "O Wins! 🎉";
+    }
+  }
+
+  Color get _statusColor {
+    if (winner == null) {
+      return currentPlayer == 1
+          ? const Color(0xFF00D4FF)
+          : const Color(0xFFFF6B9D);
+    }
+    if (winner == 0) return const Color(0xFFFFD700);
+    return winner == 1
+        ? const Color(0xFF00D4FF)
+        : const Color(0xFFFF6B9D);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF0D0D1A),
+      body: SafeArea(
+        child: Column(
+          children: [
+            // Header
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 24, 20, 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    'TIC TAC TOE',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 4,
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: _resetAll,
+                    icon: const Icon(Icons.refresh_rounded),
+                    color: Colors.white54,
+                    tooltip: 'Reset All',
+                  ),
+                ],
+              ),
+            ),
+
+            // Score Board
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+              child: Row(
+                children: [
+                  _ScoreCard(
+                    label: 'X',
+                    score: xScore,
+                    color: const Color(0xFF00D4FF),
+                    isActive: currentPlayer == 1 && winner == null,
+                  ),
+                  _ScoreCard(
+                    label: 'DRAW',
+                    score: draws,
+                    color: const Color(0xFFFFD700),
+                    isActive: false,
+                  ),
+                  _ScoreCard(
+                    label: 'O',
+                    score: oScore,
+                    color: const Color(0xFFFF6B9D),
+                    isActive: currentPlayer == 2 && winner == null,
+                  ),
+                ],
+              ),
+            ),
+
+            // Status
+            AnimatedDefaultTextStyle(
+              duration: const Duration(milliseconds: 300),
+              style: TextStyle(
+                color: _statusColor,
+                fontSize: 20,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 2,
+              ),
+              child: Text(_statusText),
+            ),
+
+            const SizedBox(height: 24),
+
+            // Game Board
+            Expanded(
+              child: Center(
+                child: AspectRatio(
+                  aspectRatio: 1,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: GridView.builder(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      gridDelegate:
+                          const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 3,
+                        crossAxisSpacing: 10,
+                        mainAxisSpacing: 10,
+                      ),
+                      itemCount: 9,
+                      itemBuilder: (context, index) {
+                        return _buildCell(index);
+                      },
+                    ),
+                  ),
+                ),
+              ),
+            ),
+
+            // New Game Button
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 8, 24, 32),
+              child: SizedBox(
+                width: double.infinity,
+                height: 54,
+                child: ElevatedButton(
+                  onPressed: _resetBoard,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF1E1E3A),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                      side: const BorderSide(
+                        color: Color(0xFF3A3A5C),
+                        width: 1.5,
+                      ),
+                    ),
+                    elevation: 0,
+                  ),
+                  child: const Text(
+                    'NEW GAME',
+                    style: TextStyle(
+                      fontSize: 16,
+                      letterSpacing: 3,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCell(int index) {
+    final value = board[index];
+    final isWinningCell = winningCells.contains(index);
+
+    return GestureDetector(
+      onTap: () => _handleTap(index),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        decoration: BoxDecoration(
+          color: isWinningCell
+              ? const Color(0xFF2A2A4A)
+              : const Color(0xFF161628),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isWinningCell
+                ? (winner == 1
+                    ? const Color(0xFF00D4FF)
+                    : const Color(0xFFFF6B9D))
+                : const Color(0xFF2A2A4A),
+            width: isWinningCell ? 2 : 1.5,
+          ),
+          boxShadow: isWinningCell
+              ? [
+                  BoxShadow(
+                    color: (winner == 1
+                            ? const Color(0xFF00D4FF)
+                            : const Color(0xFFFF6B9D))
+                        .withOpacity(0.3),
+                    blurRadius: 12,
+                    spreadRadius: 2,
+                  ),
+                ]
+              : [],
+        ),
+        child: value == 0
+            ? null
+            : ScaleTransition(
+                scale: _cellAnimations[index],
+                child: Center(
+                  child: value == 1
+                      ? _XMark(color: const Color(0xFF00D4FF))
+                      : _OMark(color: const Color(0xFFFF6B9D)),
+                ),
+              ),
+      ),
+    );
+  }
+}
+
+// ── X Mark Widget ────────────────────────────────────────────────────────────
+class _XMark extends StatelessWidget {
+  final Color color;
+  const _XMark({required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      size: const Size(36, 36),
+      painter: _XPainter(color: color),
+    );
+  }
+}
+
+class _XPainter extends CustomPainter {
+  final Color color;
+  _XPainter({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 4
+      ..strokeCap = StrokeCap.round
+      ..style = PaintingStyle.stroke;
+
+    canvas.drawLine(Offset(0, 0), Offset(size.width, size.height), paint);
+    canvas.drawLine(Offset(size.width, 0), Offset(0, size.height), paint);
+  }
+
+  @override
+  bool shouldRepaint(_XPainter old) => old.color != color;
+}
+
+// ── O Mark Widget ─────────────────────────────────────────────────────────────
+class _OMark extends StatelessWidget {
+  final Color color;
+  const _OMark({required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      size: const Size(36, 36),
+      painter: _OPainter(color: color),
+    );
+  }
+}
+
+class _OPainter extends CustomPainter {
+  final Color color;
+  _OPainter({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 4
+      ..style = PaintingStyle.stroke;
+
+    canvas.drawOval(
+      Rect.fromLTWH(2, 2, size.width - 4, size.height - 4),
+      paint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_OPainter old) => old.color != color;
+}
+
+// ── Score Card Widget ─────────────────────────────────────────────────────────
+class _ScoreCard extends StatelessWidget {
+  final String label;
+  final int score;
+  final Color color;
+  final bool isActive;
+
+  const _ScoreCard({
+    required this.label,
+    required this.score,
+    required this.color,
+    required this.isActive,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 300),
+        margin: const EdgeInsets.symmetric(horizontal: 6),
+        padding: const EdgeInsets.symmetric(vertical: 14),
+        decoration: BoxDecoration(
+          color: isActive
+              ? color.withOpacity(0.12)
+              : const Color(0xFF161628),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isActive ? color.withOpacity(0.5) : const Color(0xFF2A2A4A),
+            width: 1.5,
+          ),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                color: color,
+                fontSize: 13,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 2,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '$score',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 28,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

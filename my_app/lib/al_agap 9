@@ -1,0 +1,3286 @@
+// AL-AGAP — Complete Flutter App
+import 'dart:convert';
+import 'dart:io';
+import 'dart:math' as math;
+import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:http/http.dart' as http;
+import 'package:image_picker/image_picker.dart';
+import 'package:latlong2/latlong.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THEME
+// ─────────────────────────────────────────────────────────────────────────────
+final themeNotifier = ValueNotifier<bool>(false);
+
+class AC {
+  static Color cream(bool d)     => d ? const Color(0xFF2A2420) : const Color(0xFFFFF8F0);
+  static Color card(bool d)      => d ? const Color(0xFF332E2A) : Colors.white;
+  static Color blush(bool d)     => d ? const Color(0xFF5A3530) : const Color(0xFFFFD6CC);
+  static Color peach(bool d)     => d ? const Color(0xFFE8846A) : const Color(0xFFFFB5A0);
+  static Color sage(bool d)      => d ? const Color(0xFF4A6B5A) : const Color(0xFFB5D5C5);
+  static Color sky(bool d)       => d ? const Color(0xFF2E4A6A) : const Color(0xFFBFDEF5);
+  static Color lav(bool d)       => d ? const Color(0xFF3A3060) : const Color(0xFFD8CCF0);
+  static Color sb(bool d)        => d ? const Color(0xFFD4B8A8) : const Color(0xFF8B6F5E);
+  static Color mt(bool d)        => d ? const Color(0xFFB8A89A) : const Color(0xFF6B5B52);
+  static Color lt(bool d)        => d ? const Color(0xFF8A7A72) : const Color(0xFF9C8B84);
+  static Color bg1(bool d)       => d ? const Color(0xFF1A1612) : const Color(0xFFFFF0E8);
+  static Color bg2(bool d)       => d ? const Color(0xFF1A1A2A) : const Color(0xFFF5EEF8);
+  static const gold   = Color(0xFFFFD700);
+  static const streak = Color(0xFFFF6B35);
+  static const online = Color(0xFF4CAF50);
+}
+
+bool dark(BuildContext c) => Theme.of(c).brightness == Brightness.dark;
+
+BoxDecoration gbg(bool d) => BoxDecoration(
+  gradient: LinearGradient(
+    begin: Alignment.topCenter,
+    end: Alignment.bottomCenter,
+    colors: [AC.bg1(d), AC.bg2(d)],
+  ),
+);
+
+ThemeData tLight() => ThemeData(
+  brightness: Brightness.light,
+  useMaterial3: true,
+  fontFamily: 'Georgia',
+  scaffoldBackgroundColor: const Color(0xFFFFF8F0),
+  colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFFFFB5A0)),
+);
+
+ThemeData tDark() => ThemeData(
+  brightness: Brightness.dark,
+  useMaterial3: true,
+  fontFamily: 'Georgia',
+  scaffoldBackgroundColor: const Color(0xFF1A1612),
+  colorScheme: ColorScheme.fromSeed(
+    seedColor: const Color(0xFFFFB5A0),
+    brightness: Brightness.dark,
+  ),
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────────────────────────────────────
+enum UserRole { sender, receiver, both }
+enum MapFilter { all, shelter, welfare, vet, barangay, cityHall }
+enum OrgType   { shelter, vet, welfare, clinic, barangay, cityHall, other }
+
+extension URX on UserRole {
+  String get label {
+    switch (this) {
+      case UserRole.sender:   return 'Sender';
+      case UserRole.receiver: return 'Receiver';
+      case UserRole.both:     return 'Both';
+    }
+  }
+  String get desc {
+    switch (this) {
+      case UserRole.sender:   return 'Report animals & send photos';
+      case UserRole.receiver: return 'Receive reports as shelter/org';
+      case UserRole.both:     return 'Do everything';
+    }
+  }
+  IconData get icon {
+    switch (this) {
+      case UserRole.sender:   return Icons.send_rounded;
+      case UserRole.receiver: return Icons.inbox_rounded;
+      case UserRole.both:     return Icons.swap_horiz_rounded;
+    }
+  }
+}
+
+extension MFX on MapFilter {
+  String get label {
+    switch (this) {
+      case MapFilter.all:      return 'All';
+      case MapFilter.shelter:  return 'Shelters';
+      case MapFilter.welfare:  return 'Welfare';
+      case MapFilter.vet:      return 'Veterinary';
+      case MapFilter.barangay: return 'Barangay';
+      case MapFilter.cityHall: return 'City Hall';
+    }
+  }
+  String get emoji {
+    switch (this) {
+      case MapFilter.all:      return '🗺️';
+      case MapFilter.shelter:  return '🏠';
+      case MapFilter.welfare:  return '🐾';
+      case MapFilter.vet:      return '🩺';
+      case MapFilter.barangay: return '🏘️';
+      case MapFilter.cityHall: return '🏛️';
+    }
+  }
+}
+
+extension OTX on OrgType {
+  String get label {
+    switch (this) {
+      case OrgType.shelter:  return 'Animal Shelter';
+      case OrgType.vet:      return 'Veterinary';
+      case OrgType.welfare:  return 'Animal Welfare';
+      case OrgType.clinic:   return 'Vet Clinic';
+      case OrgType.barangay: return 'Barangay Hall';
+      case OrgType.cityHall: return 'City Hall';
+      case OrgType.other:    return 'Animal Org';
+    }
+  }
+  String get emoji {
+    switch (this) {
+      case OrgType.shelter:  return '🏠';
+      case OrgType.vet:      return '🩺';
+      case OrgType.welfare:  return '🐾';
+      case OrgType.clinic:   return '💊';
+      case OrgType.barangay: return '🏘️';
+      case OrgType.cityHall: return '🏛️';
+      case OrgType.other:    return '🌿';
+    }
+  }
+  MapFilter get mf {
+    switch (this) {
+      case OrgType.shelter:  return MapFilter.shelter;
+      case OrgType.welfare:  return MapFilter.welfare;
+      case OrgType.vet:
+      case OrgType.clinic:   return MapFilter.vet;
+      case OrgType.barangay: return MapFilter.barangay;
+      case OrgType.cityHall: return MapFilter.cityHall;
+      default:               return MapFilter.all;
+    }
+  }
+  Color pc(bool d) {
+    switch (this) {
+      case OrgType.shelter:  return AC.sage(d);
+      case OrgType.vet:      return AC.sky(d);
+      case OrgType.welfare:  return AC.lav(d);
+      case OrgType.clinic:   return d ? const Color(0xFF6A4A2A) : const Color(0xFFFFE8D6);
+      case OrgType.barangay: return d ? const Color(0xFF4A5A2A) : const Color(0xFFE8F5D6);
+      case OrgType.cityHall: return d ? const Color(0xFF4A3A6A) : const Color(0xFFE8D6F5);
+      default:               return d ? const Color(0xFF3A5A3A) : const Color(0xFFD6EAD8);
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MODELS
+// ─────────────────────────────────────────────────────────────────────────────
+class ImageArg {
+  final File?      file;
+  final Uint8List? bytes;
+  final String?    webUrl;
+  const ImageArg({this.file, this.bytes, this.webUrl});
+  bool get has => file != null || bytes != null || webUrl != null;
+}
+
+Widget bImg(ImageArg? a, {BoxFit fit = BoxFit.cover}) {
+  if (a == null || !a.has) return const SizedBox.shrink();
+  if (a.webUrl != null) {
+    return Image.network(a.webUrl!, fit: fit,
+      errorBuilder: (_, __, ___) => const Icon(Icons.broken_image));
+  }
+  if (a.bytes != null) {
+    return Image.memory(a.bytes!, fit: fit,
+      errorBuilder: (_, __, ___) => const Icon(Icons.broken_image));
+  }
+  return Image.file(a.file!, fit: fit);
+}
+
+class OrgPin {
+  final String  name;
+  final OrgType type;
+  final LatLng  pos;
+  final String? phone;
+  final String? website;
+  final double  km;
+  const OrgPin({
+    required this.name, required this.type, required this.pos,
+    this.phone, this.website, required this.km,
+  });
+  String get dist => km < 1 ? '${(km * 1000).toInt()} m' : '${km.toStringAsFixed(1)} km';
+}
+
+class MUser {
+  final String   id, username, emoji;
+  final UserRole role;
+  final bool     online;
+  const MUser({
+    required this.id, required this.username, required this.emoji,
+    required this.role, this.online = false,
+  });
+  String get desc => role.desc;
+}
+
+class ChatMsg {
+  final String   sid, text;
+  final DateTime time;
+  ChatMsg({required this.sid, required this.text, required this.time});
+}
+
+class Friend {
+  final MUser   user;
+  bool          pinned;
+  List<ChatMsg> msgs;
+  Friend({required this.user, this.pinned = false, List<ChatMsg>? msgs})
+      : msgs = msgs ?? [];
+}
+
+class BItem {
+  final String   id, title, subtitle, emoji;
+  final DateTime at;
+  BItem({required this.id, required this.title, required this.subtitle,
+         required this.emoji, required this.at});
+}
+
+const kAvatars = ['🐶','🐱','🐰','🐻','🦊','🐼','🐨','🐯','🦁','🐸','🐧','🦋'];
+
+final kMock = <MUser>[
+  const MUser(id:'u1', username:'PAWS Philippines',  emoji:'🐾', role:UserRole.receiver, online:true),
+  const MUser(id:'u2', username:'Maria Santos',       emoji:'🐶', role:UserRole.sender),
+  const MUser(id:'u3', username:'CityVet Office',     emoji:'🩺', role:UserRole.receiver, online:true),
+  const MUser(id:'u4', username:'Juan dela Cruz',     emoji:'😊', role:UserRole.both),
+  const MUser(id:'u5', username:'CARA Welfare PH',    emoji:'🏠', role:UserRole.receiver),
+  const MUser(id:'u6', username:'Happy Paws Clinic',  emoji:'💊', role:UserRole.receiver, online:true),
+  const MUser(id:'u7', username:'Ana Reyes',          emoji:'🦋', role:UserRole.sender),
+  const MUser(id:'u8', username:'ASAP Sanctuary',     emoji:'🌿', role:UserRole.receiver),
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// APP USER
+// ─────────────────────────────────────────────────────────────────────────────
+class AppUser {
+  String     username, email, displayName;
+  String?    bio;
+  UserRole   role;
+  int        reports, adoptions, coins, streak;
+  Map<String,int> coinLog;
+  String?    avEmoji;
+  Uint8List? avBytes;
+  bool       firstTime, agreedTerms;
+  List<Friend> friends;
+  List<BItem>  bookmarks;
+
+  AppUser({
+    required this.username,
+    required this.email,
+    String? displayName,
+    this.bio,
+    this.role = UserRole.both,
+    this.reports   = 0,
+    this.adoptions = 0,
+    this.coins     = 0,
+    this.streak    = 0,
+    Map<String,int>? coinLog,
+    this.avEmoji,
+    this.avBytes,
+    this.firstTime   = true,
+    this.agreedTerms = false,
+    List<Friend>? friends,
+    List<BItem>?  bookmarks,
+  })  : displayName = displayName ?? username,
+        coinLog   = coinLog   ?? {},
+        friends   = friends   ?? [],
+        bookmarks = bookmarks ?? [];
+
+  Set<int> get loggedDays {
+    final p = _mp();
+    return coinLog.keys
+        .where((k) => k.startsWith(p))
+        .map((k) => int.parse(k.split('-')[2]))
+        .toSet();
+  }
+
+  int get monthCoins {
+    final p = _mp();
+    return coinLog.entries
+        .where((e) => e.key.startsWith(p))
+        .fold(0, (s, e) => s + e.value);
+  }
+
+  static String _mp() {
+    final n = DateTime.now();
+    return '${n.year}-${n.month.toString().padLeft(2, '0')}';
+  }
+
+  static String today() {
+    final n = DateTime.now();
+    return '${n.year}-${n.month.toString().padLeft(2, '0')}-${n.day.toString().padLeft(2, '0')}';
+  }
+
+  static String yesterday() {
+    final y = DateTime.now().subtract(const Duration(days: 1));
+    return '${y.year}-${y.month.toString().padLeft(2, '0')}-${y.day.toString().padLeft(2, '0')}';
+  }
+}
+
+AppUser? curUser;
+bool appDark = false;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STORE
+// ─────────────────────────────────────────────────────────────────────────────
+class St {
+  static Future<void> load() async {
+    final p = await SharedPreferences.getInstance();
+    appDark = p.getBool('dm') ?? false;
+    themeNotifier.value = appDark;
+    final un = p.getString('un');
+    if (un != null) {
+      Uint8List? av;
+      final b = p.getString('ab');
+      if (b != null) {
+        try { av = base64Decode(b); } catch (_) {}
+      }
+      Map<String,int> cl = {};
+      final lj = p.getString('cl');
+      if (lj != null) {
+        try {
+          cl = (jsonDecode(lj) as Map).map(
+            (k, v) => MapEntry(k.toString(), (v as num).toInt()),
+          );
+        } catch (_) {}
+      }
+      final rs = p.getString('role') ?? '';
+      UserRole r = UserRole.values.firstWhere(
+        (e) => e.name == rs, orElse: () => UserRole.both,
+      );
+      curUser = AppUser(
+        username:     un,
+        email:        p.getString('em') ?? '',
+        displayName:  p.getString('dn'),
+        bio:          p.getString('bio'),
+        role:         r,
+        reports:      p.getInt('rep')    ?? 0,
+        adoptions:    p.getInt('ado')    ?? 0,
+        coins:        p.getInt('coins')  ?? 0,
+        streak:       p.getInt('streak') ?? 0,
+        coinLog:      cl,
+        avEmoji:      p.getString('ae'),
+        avBytes:      av,
+        firstTime:    p.getBool('ft') ?? true,
+        agreedTerms:  p.getBool('at') ?? false,
+      );
+      _seedFriends();
+    }
+  }
+
+  static void _seedFriends() {
+    if (curUser == null || curUser!.friends.isNotEmpty) return;
+    curUser!.friends = [
+      Friend(
+        user: kMock[0],
+        msgs: [
+          ChatMsg(sid: 'u1', text: 'Hello! We received your animal report.',
+                  time: DateTime.now().subtract(const Duration(hours: 2))),
+          ChatMsg(sid: 'me', text: 'Thank you! Is the dog safe?',
+                  time: DateTime.now().subtract(const Duration(hours: 1))),
+          ChatMsg(sid: 'u1', text: "Yes! He's being cared for 🐶",
+                  time: DateTime.now().subtract(const Duration(minutes: 30))),
+        ],
+      ),
+      Friend(user: kMock[2]),
+      Friend(user: kMock[3], pinned: true),
+    ];
+  }
+
+  static Future<void> save() async {
+    if (curUser == null) return;
+    final p = await SharedPreferences.getInstance();
+    await p.setString('un',     curUser!.username);
+    await p.setString('em',     curUser!.email);
+    await p.setString('dn',     curUser!.displayName);
+    if (curUser!.bio != null) {
+      await p.setString('bio', curUser!.bio!);
+    } else {
+      await p.remove('bio');
+    }
+    await p.setString('role',   curUser!.role.name);
+    await p.setInt('rep',       curUser!.reports);
+    await p.setInt('ado',       curUser!.adoptions);
+    await p.setInt('coins',     curUser!.coins);
+    await p.setInt('streak',    curUser!.streak);
+    await p.setString('cl',     jsonEncode(curUser!.coinLog));
+    if (curUser!.avEmoji != null) {
+      await p.setString('ae', curUser!.avEmoji!);
+    } else {
+      await p.remove('ae');
+    }
+    if (curUser!.avBytes != null) {
+      await p.setString('ab', base64Encode(curUser!.avBytes!));
+    } else {
+      await p.remove('ab');
+    }
+    await p.setBool('dm', appDark);
+    await p.setBool('ft', curUser!.firstTime);
+    await p.setBool('at', curUser!.agreedTerms);
+  }
+
+  static Future<void> clear() async {
+    await (await SharedPreferences.getInstance()).clear();
+  }
+
+  static Future<(bool, int, int)> bonus() async {
+    if (curUser == null) return (false, 0, 0);
+    final t = AppUser.today();
+    if (curUser!.coinLog.containsKey(t)) return (false, 0, curUser!.streak);
+    final ns = curUser!.coinLog.containsKey(AppUser.yesterday())
+        ? curUser!.streak + 1
+        : 1;
+    final c = math.min(ns, 7);
+    curUser!.streak = ns;
+    curUser!.coinLog[t] = c;
+    curUser!.coins += c;
+    await save();
+    return (true, c, ns);
+  }
+
+  static Future<void> resetStreak() async {
+    curUser?.streak = 0;
+    await save();
+  }
+
+  static Future<List<String>> hist() async {
+    return (await SharedPreferences.getInstance()).getStringList('sh') ?? [];
+  }
+
+  static Future<void> addHist(String q) async {
+    if (q.trim().isEmpty) return;
+    final p = await SharedPreferences.getInstance();
+    final h = p.getStringList('sh') ?? [];
+    h.remove(q);
+    h.insert(0, q);
+    if (h.length > 20) h.removeLast();
+    await p.setStringList('sh', h);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OVERPASS + NOMINATIM
+// ─────────────────────────────────────────────────────────────────────────────
+Future<List<OrgPin>> fetchOrgs(LatLng center, double rkm, MapFilter f) async {
+  final r   = (rkm * 1000).toInt();
+  final lat = center.latitude;
+  final lng = center.longitude;
+
+  final buf = StringBuffer();
+  if (f == MapFilter.all || f == MapFilter.vet) {
+    buf.writeln('node["amenity"="veterinary"](around:$r,$lat,$lng);');
+    buf.writeln('way["amenity"="veterinary"](around:$r,$lat,$lng);');
+    buf.writeln('node["healthcare"="veterinary"](around:$r,$lat,$lng);');
+    buf.writeln('node["name"~"[Vv]et",i](around:$r,$lat,$lng);');
+    buf.writeln('node["name"~"[Cc]linic",i](around:$r,$lat,$lng);');
+  }
+  if (f == MapFilter.all || f == MapFilter.shelter) {
+    buf.writeln('node["amenity"="animal_shelter"](around:$r,$lat,$lng);');
+    buf.writeln('way["amenity"="animal_shelter"](around:$r,$lat,$lng);');
+    buf.writeln('node["name"~"[Ss]helter",i](around:$r,$lat,$lng);');
+    buf.writeln('node["name"~"[Rr]escue",i](around:$r,$lat,$lng);');
+  }
+  if (f == MapFilter.all || f == MapFilter.welfare) {
+    buf.writeln('node["amenity"="animal_boarding"](around:$r,$lat,$lng);');
+    buf.writeln('node["shop"="pet"](around:$r,$lat,$lng);');
+    buf.writeln('node["name"~"[Pp]aws",i](around:$r,$lat,$lng);');
+    buf.writeln('node["name"~"[Aa]nimal",i](around:$r,$lat,$lng);');
+  }
+  if (f == MapFilter.all || f == MapFilter.barangay) {
+    buf.writeln('node["office"="government"]["name"~"[Bb]arangay",i](around:$r,$lat,$lng);');
+    buf.writeln('node["name"~"[Bb]arangay [Hh]all",i](around:$r,$lat,$lng);');
+  }
+  if (f == MapFilter.all || f == MapFilter.cityHall) {
+    buf.writeln('node["amenity"="townhall"](around:$r,$lat,$lng);');
+    buf.writeln('node["name"~"[Cc]ity [Hh]all",i](around:$r,$lat,$lng);');
+  }
+
+  final nodes = buf.toString();
+  if (nodes.trim().isEmpty) return _fallback(center);
+
+  final query = '[out:json][timeout:30];\n(\n$nodes);\nout center;';
+
+  try {
+    http.Response resp;
+    if (kIsWeb) {
+      final enc = Uri.encodeComponent(
+        'https://overpass-api.de/api/interpreter?data=${Uri.encodeComponent(query)}',
+      );
+      resp = await http
+          .get(Uri.parse('https://api.allorigins.win/get?url=$enc'),
+               headers: {'User-Agent': 'AL-AGAP/1.0 alagap.philippines@gmail.com'})
+          .timeout(const Duration(seconds: 30));
+    } else {
+      resp = await http
+          .post(Uri.parse('https://overpass-api.de/api/interpreter'),
+                body: query,
+                headers: {'Content-Type': 'application/x-www-form-urlencoded'})
+          .timeout(const Duration(seconds: 30));
+    }
+
+    if (resp.statusCode != 200) return _fallback(center);
+
+    Map<String,dynamic> data;
+    if (kIsWeb) {
+      final w = jsonDecode(resp.body) as Map<String,dynamic>;
+      data    = jsonDecode(w['contents'] as String? ?? '{}') as Map<String,dynamic>;
+    } else {
+      data = jsonDecode(resp.body) as Map<String,dynamic>;
+    }
+
+    final els = (data['elements'] as List?) ?? [];
+    if (els.isEmpty) return _fallback(center);
+
+    final dist  = const Distance();
+    final pins  = <OrgPin>[];
+    final seen  = <String>{};
+
+    for (final el in els) {
+      final tags = (el['tags'] as Map<String,dynamic>?) ?? {};
+      final name = (tags['name'] ?? tags['operator'] ?? 'Unnamed').toString();
+      if (seen.contains(name)) continue;
+      seen.add(name);
+
+      double? elat, elng;
+      if (el['type'] == 'node') {
+        elat = (el['lat'] as num?)?.toDouble();
+        elng = (el['lon'] as num?)?.toDouble();
+      } else if (el['center'] != null) {
+        elat = (el['center']['lat'] as num?)?.toDouble();
+        elng = (el['center']['lon'] as num?)?.toDouble();
+      }
+      if (elat == null || elng == null) continue;
+
+      final p   = LatLng(elat, elng);
+      final km  = dist.as(LengthUnit.Kilometer, center, p);
+      final am  = (tags['amenity']    ?? '').toString().toLowerCase();
+      final sh  = (tags['shop']       ?? '').toString().toLowerCase();
+      final he  = (tags['healthcare'] ?? '').toString().toLowerCase();
+      final of  = (tags['office']     ?? '').toString().toLowerCase();
+      final nl  = name.toLowerCase();
+
+      OrgType t = OrgType.other;
+      if (am == 'veterinary' || he == 'veterinary')           t = OrgType.vet;
+      else if (am == 'animal_shelter')                         t = OrgType.shelter;
+      else if (sh == 'pet' || am == 'animal_boarding')         t = OrgType.clinic;
+      else if (am == 'townhall' || (of == 'government' && nl.contains('city hall'))) t = OrgType.cityHall;
+      else if (of == 'government' || nl.contains('barangay'))  t = OrgType.barangay;
+      else if (nl.contains('vet') || nl.contains('clinic'))    t = OrgType.vet;
+      else if (nl.contains('shelter') || nl.contains('rescue'))t = OrgType.shelter;
+      else if (nl.contains('paws') || nl.contains('animal'))   t = OrgType.welfare;
+
+      if (f != MapFilter.all && t.mf != f) continue;
+
+      pins.add(OrgPin(
+        name: name, type: t, pos: p,
+        phone:   tags['phone']?.toString(),
+        website: tags['website']?.toString(),
+        km: km,
+      ));
+    }
+
+    pins.sort((a, b) => a.km.compareTo(b.km));
+    return pins.isNotEmpty ? pins : _fallback(center);
+  } catch (_) {
+    return _fallback(center);
+  }
+}
+
+List<OrgPin> _fallback(LatLng c) {
+  final la = c.latitude;
+  final ln = c.longitude;
+  return [
+    OrgPin(name:'PAWS Animal Welfare',    type:OrgType.welfare,  pos:LatLng(la+0.007,ln+0.005), phone:'+6391712345', km:0.8),
+    OrgPin(name:'City Veterinary Office', type:OrgType.vet,      pos:LatLng(la-0.009,ln+0.008), phone:'+6391798765', km:1.2),
+    OrgPin(name:'CARA Philippines',       type:OrgType.shelter,  pos:LatLng(la+0.015,ln-0.010), phone:'+6391812345', km:2.1),
+    OrgPin(name:'Happy Paws Clinic',      type:OrgType.clinic,   pos:LatLng(la-0.016,ln-0.012), phone:'+6391912345', km:2.4),
+    OrgPin(name:'Barangay Hall',          type:OrgType.barangay, pos:LatLng(la-0.003,ln+0.002), phone:'+6391500000', km:0.3),
+    OrgPin(name:'City Hall',              type:OrgType.cityHall, pos:LatLng(la+0.012,ln+0.010), phone:'+6391600000', km:1.8),
+  ];
+}
+
+Future<List<OrgPin>> searchNom(String q, LatLng? center) async {
+  final dist   = const Distance();
+  final results = <OrgPin>[];
+  final seen    = <String>{};
+  for (final term in ['veterinary $q', 'animal shelter $q', 'pet clinic $q', '$q Philippines']) {
+    final url = 'https://nominatim.openstreetmap.org/search'
+        '?q=${Uri.encodeComponent(term)}&format=json&limit=5&addressdetails=0';
+    try {
+      final r = await http.get(Uri.parse(url), headers: {
+        'User-Agent': 'AL-AGAP/1.0 alagap.philippines@gmail.com',
+        'Accept-Language': 'en',
+      }).timeout(const Duration(seconds: 10));
+      if (r.statusCode != 200) continue;
+      for (final el in jsonDecode(r.body) as List) {
+        final name = (el['display_name'] ?? '').toString().split(',').first.trim();
+        if (seen.contains(name) || name.isEmpty) continue;
+        seen.add(name);
+        final la = double.tryParse(el['lat']?.toString() ?? '') ?? 0;
+        final ln = double.tryParse(el['lon']?.toString() ?? '') ?? 0;
+        if (la == 0 && ln == 0) continue;
+        final p  = LatLng(la, ln);
+        final km = center != null ? dist.as(LengthUnit.Kilometer, center, p) : 0.0;
+        results.add(OrgPin(name: name, type: OrgType.other, pos: p, km: km));
+      }
+    } catch (_) { continue; }
+  }
+  results.sort((a, b) => a.km.compareTo(b.km));
+  return results;
+}
+
+Future<List<String>> suggest(String q) async {
+  if (q.trim().length < 2) return [];
+  final url = 'https://nominatim.openstreetmap.org/search'
+      '?q=${Uri.encodeComponent('$q animal Philippines')}&format=json&limit=5&addressdetails=0';
+  try {
+    final r = await http.get(Uri.parse(url),
+        headers: {'User-Agent': 'AL-AGAP/1.0 alagap.philippines@gmail.com'})
+        .timeout(const Duration(seconds: 8));
+    if (r.statusCode != 200) return [];
+    return (jsonDecode(r.body) as List)
+        .map((e) => (e['display_name'] ?? '').toString().split(',').first.trim())
+        .where((s) => s.isNotEmpty)
+        .take(5)
+        .toList();
+  } catch (_) {
+    return [];
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MAIN
+// ─────────────────────────────────────────────────────────────────────────────
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  if (!kIsWeb) {
+    SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: Brightness.dark,
+    ));
+  }
+  await St.load();
+  runApp(const App());
+}
+
+class App extends StatelessWidget {
+  const App({super.key});
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<bool>(
+      valueListenable: themeNotifier,
+      builder: (_, d, __) {
+        return MaterialApp(
+          title: 'AL-AGAP',
+          debugShowCheckedModeBanner: false,
+          theme: tLight(),
+          darkTheme: tDark(),
+          themeMode: d ? ThemeMode.dark : ThemeMode.light,
+          initialRoute: '/',
+          routes: {
+            '/':         (_) => const Router_(),
+            '/terms':    (_) => const TermsScreen(),
+            '/onboard':  (_) => const OnboardScreen(),
+            '/auth':     (_) => const AuthScreen(),
+            '/home':     (_) => const HomeScreen(),
+            '/adopt':    (_) => const AdoptScreen(),
+            '/report':   (_) => const ReportScreen(),
+            '/profile':  (_) => const ProfileScreen(),
+            '/settings': (_) => const SettingsScreen(),
+            '/friends':  (_) => const FriendsScreen(),
+            '/bookmarks':(_) => const BookmarksScreen(),
+          },
+        );
+      },
+    );
+  }
+}
+
+class Router_ extends StatelessWidget {
+  const Router_();
+  @override
+  Widget build(BuildContext context) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (curUser == null || !curUser!.agreedTerms) {
+        Navigator.pushReplacementNamed(context, '/terms');
+      } else if (curUser!.firstTime) {
+        Navigator.pushReplacementNamed(context, '/onboard');
+      } else {
+        Navigator.pushReplacementNamed(context, '/home');
+      }
+    });
+    return const Scaffold(body: Center(child: CircularProgressIndicator()));
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SHARED HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+Widget fld(TextEditingController c, String lbl, IconData icon, bool d, {
+  TextInputType? kb, bool obs = false, Widget? suf,
+  String? Function(String?)? v, int lines = 1,
+}) {
+  return TextFormField(
+    controller: c, obscureText: obs, keyboardType: kb,
+    validator: v, maxLines: lines,
+    style: TextStyle(color: AC.mt(d), fontSize: 15),
+    decoration: InputDecoration(
+      labelText: lbl, labelStyle: TextStyle(color: AC.lt(d), fontSize: 14),
+      prefixIcon: Icon(icon, color: AC.lt(d), size: 20), suffixIcon: suf,
+      filled: true, fillColor: AC.cream(d),
+      border:             OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
+      enabledBorder:      OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide(color: AC.blush(d), width: 1.5)),
+      focusedBorder:      OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide(color: AC.peach(d), width: 2)),
+      errorBorder:        OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: Colors.redAccent, width: 1.5)),
+      focusedErrorBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: Colors.redAccent, width: 2)),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+    ),
+  );
+}
+
+Widget slbl(String t, bool d) => Padding(
+  padding: const EdgeInsets.only(bottom: 8),
+  child: Text(
+    t.toUpperCase(),
+    style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AC.lt(d), letterSpacing: 2),
+  ),
+);
+
+Widget stile(IconData icon, String lbl, Color col, bool d, VoidCallback t) {
+  return GestureDetector(
+    onTap: t,
+    child: Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+      decoration: BoxDecoration(color: col, borderRadius: BorderRadius.circular(16)),
+      child: Row(children: [
+        Icon(icon, color: AC.sb(d), size: 22),
+        const SizedBox(width: 14),
+        Text(lbl, style: TextStyle(fontSize: 15, color: AC.sb(d), fontWeight: FontWeight.w500)),
+        const Spacer(),
+        Icon(Icons.arrow_forward_ios_rounded, color: AC.lt(d), size: 14),
+      ]),
+    ),
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PEACH BUTTON
+// ─────────────────────────────────────────────────────────────────────────────
+class PBtn extends StatefulWidget {
+  final String    label;
+  final VoidCallback onTap;
+  final bool      loading;
+  const PBtn({super.key, required this.label, required this.onTap, this.loading = false});
+  @override State<PBtn> createState() => _PBtnS();
+}
+
+class _PBtnS extends State<PBtn> with SingleTickerProviderStateMixin {
+  late AnimationController _c;
+  late Animation<double>   _s;
+  @override void initState() {
+    super.initState();
+    _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 120));
+    _s = Tween(begin: 1.0, end: .95).animate(_c);
+  }
+  @override void dispose() { _c.dispose(); super.dispose(); }
+
+  @override
+  Widget build(BuildContext ctx) {
+    final d = dark(ctx);
+    return GestureDetector(
+      onTapDown:   (_) => _c.forward(),
+      onTapUp:     (_) { _c.reverse(); if (!widget.loading) widget.onTap(); },
+      onTapCancel: ()  => _c.reverse(),
+      child: ScaleTransition(
+        scale: _s,
+        child: Container(
+          width: double.infinity, height: 54,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(colors: [
+              AC.peach(d), d ? const Color(0xFFE8644A) : const Color(0xFFFF8F7A),
+            ]),
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [BoxShadow(color: AC.peach(d).withOpacity(0.4), blurRadius: 14, offset: const Offset(0, 6))],
+          ),
+          child: Center(
+            child: widget.loading
+                ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5))
+                : Text(widget.label, style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold, letterSpacing: 1)),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// USER AVATAR
+// ─────────────────────────────────────────────────────────────────────────────
+class UAv extends StatelessWidget {
+  final AppUser? u;
+  final double   sz, fs;
+  const UAv({super.key, required this.u, this.sz = 44, this.fs = 18});
+
+  @override
+  Widget build(BuildContext ctx) {
+    final d = dark(ctx);
+    if (u?.avBytes != null) {
+      return SizedBox(
+        width: sz, height: sz,
+        child: ClipOval(
+          child: Image.memory(
+            u!.avBytes!, fit: BoxFit.cover, width: sz, height: sz,
+            key: ValueKey(u!.avBytes!.length),
+            errorBuilder: (_, __, ___) => _sh(d, _initials(d)),
+          ),
+        ),
+      );
+    }
+    if (u?.avEmoji != null) {
+      return _sh(d, Text(u!.avEmoji!, style: TextStyle(fontSize: fs + 4)));
+    }
+    return _sh(d, _initials(d));
+  }
+
+  Widget _initials(bool d) => Text(
+    u != null ? u!.username[0].toUpperCase() : '👤',
+    style: TextStyle(color: Colors.white, fontSize: fs, fontWeight: FontWeight.bold),
+  );
+
+  Widget _sh(bool d, Widget ch) => Container(
+    width: sz, height: sz,
+    decoration: BoxDecoration(
+      gradient: LinearGradient(colors: [AC.peach(d), AC.sage(d)]),
+      shape: BoxShape.circle,
+      boxShadow: [BoxShadow(color: AC.peach(d).withOpacity(0.3), blurRadius: 8)],
+    ),
+    child: Center(child: ch),
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TERMS SCREEN
+// ─────────────────────────────────────────────────────────────────────────────
+class TermsScreen extends StatefulWidget {
+  const TermsScreen({super.key});
+  @override State<TermsScreen> createState() => _TermsS();
+}
+
+class _TermsS extends State<TermsScreen> {
+  bool _ok = false;
+
+  @override
+  Widget build(BuildContext ctx) {
+    final d = dark(ctx);
+    return Scaffold(
+      body: Container(
+        decoration: gbg(d),
+        child: SafeArea(child: Column(children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 24, 24, 8),
+            child: Column(children: [
+              Container(
+                width: 70, height: 70,
+                decoration: BoxDecoration(color: AC.card(d), shape: BoxShape.circle,
+                  boxShadow: [BoxShadow(color: AC.peach(d).withOpacity(0.3), blurRadius: 16, spreadRadius: 2)]),
+                child: const Center(child: Text('📋', style: TextStyle(fontSize: 36))),
+              ),
+              const SizedBox(height: 16),
+              Text('Terms & Privacy', style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: AC.sb(d), letterSpacing: 1)),
+              const SizedBox(height: 6),
+              Text('Please read before continuing', style: TextStyle(fontSize: 13, color: AC.lt(d), fontStyle: FontStyle.italic)),
+            ]),
+          ),
+          Expanded(child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: Column(children: [
+              const SizedBox(height: 8),
+              _ts('1. Acceptance',       'By using AL-AGAP you agree to these terms. AL-AGAP connects animal rescuers with shelters, vets, and welfare organizations in the Philippines.', d),
+              _ts('2. Responsibilities', 'Provide accurate info when reporting animals. Misuse may result in suspension.', d),
+              _ts('3. Privacy & Data',   'AL-AGAP collects name, email, and location (when reporting) only to facilitate rescue. Data is stored locally and not shared without consent.', d),
+              _ts('4. Location',         'Location is requested only in the Report feature and is not stored permanently.', d),
+              _ts('5. Photos',           'Photos remain yours. By submitting, you grant AL-AGAP permission to share with orgs for rescue purposes.', d),
+              _ts('6. Animal Welfare',   'Report animals in distress immediately and follow proper adoption procedures.', d),
+              _ts('7. Disclaimer',       'AL-AGAP is community-driven. We do not guarantee response time of listed organizations. For emergencies, contact your local barangay or city vet directly.', d),
+              _ts('8. Contact',          'Concerns: alagap.philippines@gmail.com. Continuing means you have read and agreed.', d),
+              const SizedBox(height: 16),
+              GestureDetector(
+                onTap: () => setState(() => _ok = !_ok),
+                child: Row(children: [
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    width: 24, height: 24,
+                    decoration: BoxDecoration(
+                      color: _ok ? AC.peach(d) : Colors.transparent,
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: _ok ? AC.peach(d) : AC.lt(d), width: 2),
+                    ),
+                    child: _ok ? const Icon(Icons.check, color: Colors.white, size: 14) : null,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(child: Text(
+                    'I have read and agree to the Terms & Privacy Policy',
+                    style: TextStyle(fontSize: 13, color: AC.mt(d), height: 1.4),
+                  )),
+                ]),
+              ),
+              const SizedBox(height: 20),
+              PBtn(
+                label: 'Continue →',
+                onTap: _ok
+                    ? () async {
+                        if (curUser != null) {
+                          curUser!.agreedTerms = true;
+                          await St.save();
+                          if (mounted) {
+                            Navigator.pushReplacementNamed(context, curUser!.firstTime ? '/onboard' : '/home');
+                          }
+                        } else {
+                          if (mounted) Navigator.pushReplacementNamed(context, '/auth');
+                        }
+                      }
+                    : () => ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Please agree to continue')),
+                        ),
+              ),
+              const SizedBox(height: 24),
+            ]),
+          )),
+        ])),
+      ),
+    );
+  }
+
+  Widget _ts(String title, String body, bool d) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(color: AC.card(d).withOpacity(0.7), borderRadius: BorderRadius.circular(14)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(title, style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AC.sb(d))),
+        const SizedBox(height: 6),
+        Text(body,  style: TextStyle(fontSize: 12, color: AC.mt(d), height: 1.6)),
+      ]),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ONBOARD SCREEN
+// ─────────────────────────────────────────────────────────────────────────────
+class OnboardScreen extends StatefulWidget {
+  const OnboardScreen({super.key});
+  @override State<OnboardScreen> createState() => _OnbS();
+}
+
+class _OnbS extends State<OnboardScreen> {
+  final _pc    = PageController();
+  int    _pg   = 0;
+  final  _nc   = TextEditingController();
+  final  _bc   = TextEditingController();
+  String?    _selEmoji;
+  Uint8List? _avBytes;
+  UserRole   _role = UserRole.both;
+  final _picker = ImagePicker();
+
+  @override void dispose() { _pc.dispose(); _nc.dispose(); _bc.dispose(); super.dispose(); }
+
+  Future<void> _pick() async {
+    final x = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 50, maxWidth: 400, maxHeight: 400);
+    if (x == null) return;
+    final raw = await x.readAsBytes();
+    final cap = raw.length > 150 * 1024 ? Uint8List.fromList(raw.sublist(0, 150 * 1024)) : raw;
+    setState(() { _avBytes = cap; _selEmoji = null; });
+  }
+
+  Future<void> _done() async {
+    if (curUser == null) return;
+    if (_nc.text.trim().isNotEmpty) {
+      curUser!.displayName = _nc.text.trim();
+      curUser!.username    = _nc.text.trim();
+    }
+    curUser!.bio         = _bc.text.trim().isEmpty ? null : _bc.text.trim();
+    curUser!.role        = _role;
+    curUser!.firstTime   = false;
+    curUser!.avEmoji     = _selEmoji;
+    curUser!.avBytes     = _avBytes;
+    await St.save();
+    St._seedFriends();
+    if (mounted) Navigator.pushReplacementNamed(context, '/home');
+  }
+
+  @override
+  Widget build(BuildContext ctx) {
+    final d  = dark(ctx);
+    final sb = AC.sb(d);
+    return Scaffold(
+      body: Container(
+        decoration: gbg(d),
+        child: SafeArea(child: Column(children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 20, 24, 8),
+            child: Row(children: [
+              Text('Setup Profile', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: sb)),
+              const Spacer(),
+              ...List.generate(2, (i) => AnimatedContainer(
+                duration: const Duration(milliseconds: 300),
+                margin: const EdgeInsets.only(left: 6),
+                width: _pg == i ? 24 : 8, height: 8,
+                decoration: BoxDecoration(
+                  color: _pg == i ? AC.peach(d) : AC.blush(d),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+              )),
+            ]),
+          ),
+          Expanded(child: PageView(
+            controller: _pc,
+            physics: const NeverScrollableScrollPhysics(),
+            children: [_page1(d, sb), _page2(d, sb)],
+          )),
+        ])),
+      ),
+    );
+  }
+
+  Widget _page1(bool d, Color sb) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
+      child: Column(children: [
+        GestureDetector(
+          onTap: _pick,
+          child: Stack(alignment: Alignment.bottomRight, children: [
+            Container(
+              width: 100, height: 100,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(colors: [AC.peach(d), AC.sage(d)]),
+                shape: BoxShape.circle,
+                boxShadow: [BoxShadow(color: AC.peach(d).withOpacity(0.3), blurRadius: 16)],
+              ),
+              child: Center(child: _avBytes != null
+                  ? ClipOval(child: Image.memory(_avBytes!, fit: BoxFit.cover, width: 100, height: 100))
+                  : _selEmoji != null
+                      ? Text(_selEmoji!, style: const TextStyle(fontSize: 44))
+                      : Text(curUser?.username[0].toUpperCase() ?? '?',
+                             style: const TextStyle(color: Colors.white, fontSize: 42, fontWeight: FontWeight.bold))),
+            ),
+            Container(
+              width: 30, height: 30,
+              decoration: BoxDecoration(color: AC.peach(d), shape: BoxShape.circle, border: Border.all(color: Colors.white, width: 2)),
+              child: const Icon(Icons.camera_alt, color: Colors.white, size: 14),
+            ),
+          ]),
+        ),
+        const SizedBox(height: 12),
+        SizedBox(
+          height: 44,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(vertical: 2),
+            itemCount: kAvatars.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 8),
+            itemBuilder: (_, i) {
+              final e   = kAvatars[i];
+              final sel = _selEmoji == e && _avBytes == null;
+              return GestureDetector(
+                onTap: () => setState(() { _selEmoji = e; _avBytes = null; }),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 150),
+                  width: 40, height: 40,
+                  decoration: BoxDecoration(
+                    color: sel ? AC.peach(d).withOpacity(0.3) : AC.cream(d),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: sel ? AC.peach(d) : Colors.transparent, width: 2),
+                  ),
+                  child: Center(child: Text(e, style: const TextStyle(fontSize: 22))),
+                ),
+              );
+            },
+          ),
+        ),
+        const SizedBox(height: 24),
+        fld(_nc, 'Display Name', Icons.person_outline_rounded, d),
+        const SizedBox(height: 14),
+        fld(_bc, 'Bio (optional)', Icons.edit_outlined, d, lines: 3),
+        const SizedBox(height: 28),
+        PBtn(
+          label: 'Next →',
+          onTap: () {
+            if (_nc.text.trim().isEmpty) {
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please enter a display name')));
+              return;
+            }
+            setState(() => _pg = 1);
+            _pc.nextPage(duration: const Duration(milliseconds: 300), curve: Curves.easeInOut);
+          },
+        ),
+      ]),
+    );
+  }
+
+  Widget _page2(bool d, Color sb) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
+      child: Column(children: [
+        const SizedBox(height: 8),
+        Text('What is your role?', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: sb)),
+        const SizedBox(height: 6),
+        Text('You can change this in Settings', style: TextStyle(fontSize: 13, color: AC.lt(d), fontStyle: FontStyle.italic)),
+        const SizedBox(height: 24),
+        ...UserRole.values.map((r) {
+          return GestureDetector(
+            onTap: () => setState(() => _role = r),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              margin: const EdgeInsets.only(bottom: 14),
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                color: _role == r ? AC.peach(d).withOpacity(0.15) : AC.card(d),
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: _role == r ? AC.peach(d) : AC.blush(d), width: _role == r ? 2 : 1.5),
+              ),
+              child: Row(children: [
+                Container(
+                  width: 48, height: 48,
+                  decoration: BoxDecoration(
+                    color: _role == r ? AC.peach(d) : AC.blush(d).withOpacity(0.3),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(r.icon, color: _role == r ? Colors.white : sb, size: 24),
+                ),
+                const SizedBox(width: 16),
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(r.label, style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: sb)),
+                  const SizedBox(height: 4),
+                  Text(r.desc, style: TextStyle(fontSize: 12, color: AC.mt(d), height: 1.4)),
+                ])),
+                if (_role == r) Icon(Icons.check_circle, color: AC.peach(d), size: 22),
+              ]),
+            ),
+          );
+        }),
+        const SizedBox(height: 8),
+        PBtn(label: "Let's Go! 🐾", onTap: _done),
+      ]),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUTH SCREEN
+// ─────────────────────────────────────────────────────────────────────────────
+class AuthScreen extends StatefulWidget {
+  const AuthScreen({super.key});
+  @override State<AuthScreen> createState() => _AuthS();
+}
+
+class _AuthS extends State<AuthScreen> with TickerProviderStateMixin {
+  bool _login = true, _obs = true, _loading = false;
+  final _fk = GlobalKey<FormState>();
+  final _un = TextEditingController();
+  final _em = TextEditingController();
+  final _pw = TextEditingController();
+  late AnimationController _fc;
+  late Animation<double>   _fa;
+
+  @override void initState() {
+    super.initState();
+    _fc = AnimationController(vsync: this, duration: const Duration(milliseconds: 500));
+    _fa = CurvedAnimation(parent: _fc, curve: Curves.easeIn);
+    _fc.forward();
+  }
+  @override void dispose() { _fc.dispose(); _un.dispose(); _em.dispose(); _pw.dispose(); super.dispose(); }
+
+  void _tog() { _fc.reset(); setState(() => _login = !_login); _fc.forward(); }
+
+  Future<void> _sub() async {
+    if (!_fk.currentState!.validate()) return;
+    setState(() => _loading = true);
+    await Future.delayed(const Duration(milliseconds: 1200));
+    curUser = AppUser(
+      username:    _login ? _em.text.split('@').first : _un.text.trim(),
+      email:       _em.text.trim(),
+      firstTime:   true,
+      agreedTerms: true,
+    );
+    await St.save();
+    if (mounted) Navigator.pushReplacementNamed(context, '/onboard');
+  }
+
+  @override
+  Widget build(BuildContext ctx) {
+    final d  = dark(ctx);
+    final sb = AC.sb(d);
+    final lt = AC.lt(d);
+    final mt = AC.mt(d);
+    return Scaffold(
+      body: Container(
+        decoration: gbg(d),
+        child: SafeArea(child: FadeTransition(
+          opacity: _fa,
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 32),
+            child: Column(children: [
+              Container(
+                width: 80, height: 80,
+                decoration: BoxDecoration(color: AC.card(d), shape: BoxShape.circle,
+                  boxShadow: [BoxShadow(color: AC.peach(d).withOpacity(0.35), blurRadius: 20, spreadRadius: 3)]),
+                child: const Center(child: Text('🐾', style: TextStyle(fontSize: 38))),
+              ),
+              const SizedBox(height: 20),
+              Text('AL-AGAP', style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: sb, letterSpacing: 4)),
+              const SizedBox(height: 6),
+              Text(_login ? 'Welcome back!' : 'Create your account',
+                   style: TextStyle(fontSize: 14, color: lt, fontStyle: FontStyle.italic)),
+              const SizedBox(height: 36),
+              Container(
+                padding: const EdgeInsets.all(28),
+                decoration: BoxDecoration(
+                  color: AC.card(d).withOpacity(0.9),
+                  borderRadius: BorderRadius.circular(28),
+                  boxShadow: [BoxShadow(color: AC.blush(d).withOpacity(0.3), blurRadius: 24, offset: const Offset(0, 8))],
+                ),
+                child: Form(
+                  key: _fk,
+                  child: Column(children: [
+                    if (!_login) ...[
+                      fld(_un, 'Username', Icons.person_outline_rounded, d,
+                          v: (v) => (v == null || v.trim().isEmpty) ? 'Enter username' : null),
+                      const SizedBox(height: 16),
+                    ],
+                    fld(_em, 'Email', Icons.email_outlined, d,
+                        kb: TextInputType.emailAddress,
+                        v: (v) {
+                          if (v == null || v.isEmpty) return 'Enter email';
+                          if (!v.contains('@')) return 'Invalid email';
+                          return null;
+                        }),
+                    const SizedBox(height: 16),
+                    fld(_pw, 'Password', Icons.lock_outline_rounded, d,
+                        obs: _obs,
+                        suf: IconButton(
+                          icon: Icon(_obs ? Icons.visibility_off_outlined : Icons.visibility_outlined, color: lt, size: 20),
+                          onPressed: () => setState(() => _obs = !_obs),
+                        ),
+                        v: (v) {
+                          if (v == null || v.isEmpty) return 'Enter password';
+                          if (v.length < 6) return 'Min 6 chars';
+                          return null;
+                        }),
+                    const SizedBox(height: 28),
+                    PBtn(label: _login ? 'Log In' : 'Create Account', loading: _loading, onTap: _sub),
+                  ]),
+                ),
+              ),
+              const SizedBox(height: 24),
+              Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                Text(_login ? "Don't have an account? " : 'Already have an account? ',
+                     style: TextStyle(fontSize: 13, color: mt)),
+                GestureDetector(
+                  onTap: _tog,
+                  child: Text(_login ? 'Sign Up' : 'Log In',
+                               style: TextStyle(fontSize: 13, color: AC.peach(d), fontWeight: FontWeight.bold)),
+                ),
+              ]),
+              const SizedBox(height: 16),
+              GestureDetector(
+                onTap: () async {
+                  curUser = AppUser(username: 'Guest', email: 'guest@alagap.app', firstTime: true, agreedTerms: true);
+                  await St.save();
+                  if (mounted) Navigator.pushReplacementNamed(context, '/onboard');
+                },
+                child: Text('Skip for now →',
+                            style: TextStyle(fontSize: 12, color: lt, decoration: TextDecoration.underline)),
+              ),
+            ]),
+          ),
+        )),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BONUS DIALOG
+// ─────────────────────────────────────────────────────────────────────────────
+class BonusDlg extends StatefulWidget {
+  final int coins, streak, total;
+  const BonusDlg({super.key, required this.coins, required this.streak, required this.total});
+  @override State<BonusDlg> createState() => _BonusDlgS();
+}
+
+class _BonusDlgS extends State<BonusDlg> with SingleTickerProviderStateMixin {
+  late AnimationController _c;
+  late Animation<double>   _sc, _fa;
+  @override void initState() {
+    super.initState();
+    _c  = AnimationController(vsync: this, duration: const Duration(milliseconds: 600));
+    _sc = Tween(begin: .5, end: 1.0).animate(CurvedAnimation(parent: _c, curve: Curves.elasticOut));
+    _fa = Tween(begin: .0, end: 1.0).animate(_c);
+    _c.forward();
+  }
+  @override void dispose() { _c.dispose(); super.dispose(); }
+
+  @override
+  Widget build(BuildContext ctx) {
+    final d  = dark(ctx);
+    final sb = AC.sb(d);
+    final lt = AC.lt(d);
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      child: FadeTransition(opacity: _fa, child: ScaleTransition(scale: _sc,
+        child: Container(
+          padding: const EdgeInsets.all(28),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(colors: [AC.cream(d), AC.blush(d).withOpacity(0.5)]),
+            borderRadius: BorderRadius.circular(28),
+            boxShadow: [BoxShadow(color: AC.peach(d).withOpacity(0.3), blurRadius: 24, spreadRadius: 4)],
+          ),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Text('🎉', style: TextStyle(fontSize: 48)),
+            const SizedBox(height: 10),
+            Text('Daily Bonus!', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: sb)),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+              decoration: BoxDecoration(
+                color: AC.streak.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: AC.streak.withOpacity(0.4), width: 1.5),
+              ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                const Text('🔥', style: TextStyle(fontSize: 18)),
+                const SizedBox(width: 6),
+                Text('${widget.streak} Day Streak!',
+                     style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: AC.streak)),
+              ]),
+            ),
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              decoration: BoxDecoration(
+                color: AC.gold.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: AC.gold.withOpacity(0.4), width: 2),
+              ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                const Text('🪙', style: TextStyle(fontSize: 26)),
+                const SizedBox(width: 10),
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text('+${widget.coins} Coin${widget.coins > 1 ? 's' : ''}',
+                       style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: sb)),
+                  Text('Total: ${widget.total} coins', style: TextStyle(fontSize: 11, color: lt)),
+                ]),
+              ]),
+            ),
+            const SizedBox(height: 8),
+            Text('Day ${widget.streak} → ${math.min(widget.streak + 1, 7)} coins tomorrow',
+                 style: TextStyle(fontSize: 11, color: lt, fontStyle: FontStyle.italic)),
+            const SizedBox(height: 20),
+            PBtn(label: 'Awesome! 🐾', onTap: () => Navigator.pop(ctx)),
+          ]),
+        ),
+      )),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COIN CALENDAR
+// ─────────────────────────────────────────────────────────────────────────────
+class CoinCal extends StatelessWidget {
+  final AppUser? u;
+  final bool     d;
+  const CoinCal({super.key, required this.u, required this.d});
+
+  @override
+  Widget build(BuildContext ctx) {
+    final now    = DateTime.now();
+    final months = ['January','February','March','April','May','June',
+                    'July','August','September','October','November','December'];
+    final mn     = months[now.month - 1];
+    final dim    = DateUtils.getDaysInMonth(now.year, now.month);
+    final fw     = DateTime(now.year, now.month, 1).weekday % 7;
+    final logged = u?.loggedDays ?? {};
+    final mc     = u?.monthCoins ?? 0;
+    final sk     = u?.streak ?? 0;
+    final sb     = AC.sb(d);
+    final lt     = AC.lt(d);
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(colors: [AC.gold.withOpacity(0.1), AC.blush(d).withOpacity(0.15)]),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AC.gold.withOpacity(0.3), width: 1.5),
+      ),
+      child: Column(children: [
+        Row(children: [
+          Text('$mn ${now.year}', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: sb)),
+          const Spacer(),
+          const Text('🪙', style: TextStyle(fontSize: 16)),
+          const SizedBox(width: 4),
+          Text('$mc/100 coins', style: TextStyle(fontSize: 12, color: lt, fontWeight: FontWeight.w600)),
+        ]),
+        const SizedBox(height: 6),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: LinearProgressIndicator(
+            value: mc / 100, minHeight: 5,
+            backgroundColor: AC.blush(d).withOpacity(0.3),
+            valueColor: const AlwaysStoppedAnimation<Color>(AC.gold),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+          Text('Streak: $sk day${sk != 1 ? 's' : ''} 🔥',
+               style: TextStyle(fontSize: 11, color: AC.streak, fontWeight: FontWeight.bold)),
+          Text('Next: +${math.min(sk + 1, 7)} 🪙', style: TextStyle(fontSize: 11, color: lt)),
+        ]),
+        const SizedBox(height: 10),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceAround,
+          children: ['S','M','T','W','T','F','S'].map((x) => SizedBox(
+            width: 26,
+            child: Text(x, textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: lt)),
+          )).toList(),
+        ),
+        const SizedBox(height: 4),
+        GridView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 7, mainAxisSpacing: 3, crossAxisSpacing: 3, childAspectRatio: 1,
+          ),
+          itemCount: fw + dim,
+          itemBuilder: (_, i) {
+            if (i < fw) return const SizedBox.shrink();
+            final day = i - fw + 1;
+            final isL = logged.contains(day);
+            final isT = day == now.day;
+            final ky  = '${now.year}-${now.month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')}';
+            final cv  = u?.coinLog[ky] ?? 0;
+            return Container(
+              decoration: BoxDecoration(
+                color: isL ? AC.gold.withOpacity(0.8) : isT ? AC.peach(d).withOpacity(0.35) : Colors.transparent,
+                borderRadius: BorderRadius.circular(5),
+                border: isT ? Border.all(color: AC.peach(d), width: 1.5) : null,
+              ),
+              child: Center(child: isL && cv > 0
+                  ? Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                      Text('$day', style: const TextStyle(fontSize: 8, fontWeight: FontWeight.bold, color: Colors.white)),
+                      Text('+$cv', style: const TextStyle(fontSize: 7, color: Colors.white, fontWeight: FontWeight.bold)),
+                    ])
+                  : Text('$day', style: TextStyle(
+                      fontSize: 9,
+                      fontWeight: isT ? FontWeight.bold : FontWeight.normal,
+                      color: isL ? Colors.white : sb,
+                    ))),
+            );
+          },
+        ),
+      ]),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HOME SCREEN
+// ─────────────────────────────────────────────────────────────────────────────
+class HomeScreen extends StatefulWidget {
+  const HomeScreen({super.key});
+  @override State<HomeScreen> createState() => _HomeS();
+}
+
+class _HomeS extends State<HomeScreen> with SingleTickerProviderStateMixin {
+  File?      _f;
+  Uint8List? _b;
+  String?    _wu;
+  final _picker = ImagePicker();
+  late AnimationController _fc;
+  late Animation<double>   _fa;
+
+  bool     get _has => _f != null || _b != null || _wu != null;
+  ImageArg get _arg => ImageArg(file: _f, bytes: _b, webUrl: _wu);
+
+  @override void initState() {
+    super.initState();
+    _fc = AnimationController(vsync: this, duration: const Duration(milliseconds: 600));
+    _fa = CurvedAnimation(parent: _fc, curve: Curves.easeIn);
+    _fc.forward();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final (g, c, s) = await St.bonus();
+      if (g && mounted) {
+        showDialog(context: context, builder: (_) => BonusDlg(coins: c, streak: s, total: curUser?.coins ?? c));
+        setState(() {});
+      }
+    });
+  }
+  @override void dispose() { _fc.dispose(); super.dispose(); }
+
+  Future<void> _photo(ImageSource src) async {
+    final x = await _picker.pickImage(source: src, imageQuality: 80, maxWidth: 1024, maxHeight: 1024);
+    if (x == null) return;
+    if (kIsWeb) {
+      setState(() { _wu = x.path; _b = null; _f = null; });
+    } else {
+      setState(() { _f = File(x.path); _b = null; _wu = null; });
+    }
+  }
+
+  void _clear() => setState(() { _f = null; _b = null; _wu = null; });
+
+  @override
+  Widget build(BuildContext ctx) {
+    final d    = dark(ctx);
+    final sb   = AC.sb(d);
+    final lt   = AC.lt(d);
+    final role = curUser?.role ?? UserRole.both;
+    return Scaffold(
+      body: Container(
+        decoration: gbg(d),
+        child: FadeTransition(opacity: _fa, child: SafeArea(child: Column(children: [
+          // Header
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+            child: Row(children: [
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('AL-AGAP', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: sb, letterSpacing: 3)),
+                Row(children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(color: AC.peach(d).withOpacity(0.2), borderRadius: BorderRadius.circular(8)),
+                    child: Text(role.label, style: TextStyle(fontSize: 10, color: AC.peach(d), fontWeight: FontWeight.bold)),
+                  ),
+                  const SizedBox(width: 6),
+                  Text('• Rescue • Adopt', style: TextStyle(fontSize: 11, color: lt)),
+                ]),
+              ]),
+              const Spacer(),
+              if (curUser != null) Container(
+                margin: const EdgeInsets.only(right: 6),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                decoration: BoxDecoration(
+                  color: AC.gold.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: AC.gold.withOpacity(0.4), width: 1.5),
+                ),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  const Text('🪙', style: TextStyle(fontSize: 13)),
+                  const SizedBox(width: 3),
+                  Text('${curUser!.coins}', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: sb)),
+                  if (curUser!.streak > 0) ...[
+                    const SizedBox(width: 5),
+                    const Text('🔥', style: TextStyle(fontSize: 12)),
+                    Text('${curUser!.streak}', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AC.streak)),
+                  ],
+                ]),
+              ),
+              IconButton(
+                icon: Icon(Icons.people_outline_rounded, color: sb, size: 22),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                onPressed: () => Navigator.pushNamed(ctx, '/friends').then((_) => setState(() {})),
+              ),
+              IconButton(
+                icon: Icon(Icons.settings_outlined, color: sb, size: 22),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                onPressed: () => Navigator.pushNamed(ctx, '/settings').then((_) => setState(() {})),
+              ),
+              const SizedBox(width: 4),
+              GestureDetector(
+                onTap: () => Navigator.pushNamed(ctx, '/profile').then((_) => setState(() {})),
+                child: UAv(
+                  key: ValueKey('${curUser?.avBytes?.length ?? 0}_${curUser?.avEmoji ?? ""}'),
+                  u: curUser, sz: 40, fs: 16,
+                ),
+              ),
+            ]),
+          ),
+          // Role banner for receivers
+          if (role == UserRole.receiver)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(color: AC.sky(d).withOpacity(0.3), borderRadius: BorderRadius.circular(14)),
+                child: Row(children: [
+                  const Text('📥', style: TextStyle(fontSize: 18)),
+                  const SizedBox(width: 10),
+                  Expanded(child: Text(
+                    '${curUser?.friends.length ?? 0} connections ready to receive reports.',
+                    style: TextStyle(fontSize: 12, color: AC.mt(d)),
+                  )),
+                ]),
+              ),
+            ),
+          // Body
+          Expanded(child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: Column(children: [
+              const SizedBox(height: 8),
+              _photoArea(d, sb, lt),
+              const SizedBox(height: 20),
+              if (_has) _actions(d) else _hints(d, role),
+              const SizedBox(height: 32),
+            ]),
+          )),
+        ]))),
+      ),
+    );
+  }
+
+  Widget _photoArea(bool d, Color sb, Color lt) {
+    return GestureDetector(
+      onTap: !_has ? () => _photo(ImageSource.camera) : null,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 400),
+        height: _has ? 280 : 240,
+        width: double.infinity,
+        decoration: BoxDecoration(
+          color: AC.card(d),
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: _has ? AC.sage(d) : AC.peach(d).withOpacity(0.4), width: 2),
+          boxShadow: [BoxShadow(color: AC.blush(d).withOpacity(0.3), blurRadius: 20, offset: const Offset(0, 8))],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(22),
+          child: _has
+              ? Stack(fit: StackFit.expand, children: [
+                  bImg(_arg),
+                  Positioned(
+                    top: 12, right: 12,
+                    child: GestureDetector(
+                      onTap: _clear,
+                      child: Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(color: Colors.white.withOpacity(0.85), shape: BoxShape.circle),
+                        child: const Icon(Icons.close_rounded, size: 18, color: Colors.black54),
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    top: 12, left: 12,
+                    child: GestureDetector(
+                      onTap: () {
+                        if (curUser == null) return;
+                        curUser!.bookmarks.insert(0, BItem(
+                          id:       '${DateTime.now().millisecondsSinceEpoch}',
+                          title:    'Animal Photo',
+                          subtitle: DateTime.now().toString().substring(0, 16),
+                          emoji:    '📸',
+                          at:       DateTime.now(),
+                        ));
+                        St.save();
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Bookmarked! 📌'), behavior: SnackBarBehavior.floating),
+                        );
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(color: Colors.white.withOpacity(0.85), shape: BoxShape.circle),
+                        child: const Icon(Icons.bookmark_border_rounded, size: 18, color: Colors.black54),
+                      ),
+                    ),
+                  ),
+                ])
+              : Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                  Container(
+                    width: 72, height: 72,
+                    decoration: BoxDecoration(color: AC.blush(d).withOpacity(0.5), shape: BoxShape.circle),
+                    child: Icon(Icons.camera_alt_rounded, size: 34, color: AC.peach(d)),
+                  ),
+                  const SizedBox(height: 14),
+                  Text('Take a Photo', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: sb)),
+                  const SizedBox(height: 6),
+                  Text('Tap to photograph an animal', style: TextStyle(fontSize: 12, color: lt)),
+                  const SizedBox(height: 14),
+                  GestureDetector(
+                    onTap: () => _photo(ImageSource.gallery),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
+                      decoration: BoxDecoration(color: AC.sage(d).withOpacity(0.3), borderRadius: BorderRadius.circular(20)),
+                      child: Text('or choose from gallery', style: TextStyle(fontSize: 12, color: AC.mt(d))),
+                    ),
+                  ),
+                ]),
+        ),
+      ),
+    );
+  }
+
+  Widget _actions(bool d) {
+    return Column(children: [
+      Text('What would you like to do?', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: AC.mt(d))),
+      const SizedBox(height: 14),
+      Row(children: [
+        Expanded(child: _AC(
+          emoji: '🏠', label: 'Adopt', sub: 'Start the process', color: AC.sage(d),
+          onTap: () async {
+            curUser?.adoptions++;
+            await St.save();
+            if (mounted) Navigator.pushNamed(context, '/adopt', arguments: _arg);
+          },
+        )),
+        const SizedBox(width: 12),
+        Expanded(child: _AC(
+          emoji: '📍', label: 'Report', sub: 'Find nearby help', color: AC.sky(d),
+          onTap: () async {
+            curUser?.reports++;
+            await St.save();
+            if (mounted) Navigator.pushNamed(context, '/report', arguments: _arg);
+          },
+        )),
+      ]),
+      const SizedBox(height: 12),
+      Row(children: [
+        Expanded(child: _AC(
+          emoji: '🔖', label: 'Bookmarks', sub: 'Saved items', color: AC.lav(d),
+          onTap: () => Navigator.pushNamed(context, '/bookmarks').then((_) => setState(() {})),
+        )),
+        const SizedBox(width: 12),
+        Expanded(child: _AC(
+          emoji: '💬', label: 'Friends', sub: 'Chat & connect', color: AC.blush(d),
+          onTap: () => Navigator.pushNamed(context, '/friends').then((_) => setState(() {})),
+        )),
+      ]),
+    ]);
+  }
+
+  Widget _hints(bool d, UserRole role) {
+    return Column(children: [
+      if (role == UserRole.sender || role == UserRole.both) ...[
+        _HC(emoji: '📍', title: 'Report a Stray',    desc: 'Find nearby shelters and send them a photo.', color: AC.sky(d).withOpacity(0.3), d: d),
+        const SizedBox(height: 10),
+      ],
+      if (role == UserRole.receiver || role == UserRole.both) ...[
+        _HC(emoji: '📥', title: 'Receive Reports',   desc: 'Connect with senders and help animals.', color: AC.lav(d).withOpacity(0.3), d: d),
+        const SizedBox(height: 10),
+      ],
+      _HC(emoji: '🏠', title: 'Adopt an Animal',   desc: 'Learn legal steps and vet care.', color: AC.sage(d).withOpacity(0.3), d: d),
+      const SizedBox(height: 10),
+      _HC(emoji: '💬', title: 'Friends & Chat',    desc: 'Connect with shelters and rescuers.', color: AC.blush(d).withOpacity(0.3), d: d),
+    ]);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FRIENDS & CHAT
+// ─────────────────────────────────────────────────────────────────────────────
+class FriendsScreen extends StatefulWidget {
+  const FriendsScreen({super.key});
+  @override State<FriendsScreen> createState() => _FriendsS();
+}
+
+class _FriendsS extends State<FriendsScreen> with SingleTickerProviderStateMixin {
+  late TabController _tab;
+  final _sc = TextEditingController();
+  String _q = '';
+
+  @override void initState() { super.initState(); _tab = TabController(length: 2, vsync: this); }
+  @override void dispose()   { _tab.dispose(); _sc.dispose(); super.dispose(); }
+
+  List<MUser> get _sugg => kMock.where((u) =>
+    _q.length > 1 &&
+    u.username.toLowerCase().contains(_q.toLowerCase()) &&
+    !(curUser?.friends.any((f) => f.user.id == u.id) ?? false)
+  ).toList();
+
+  void _add(MUser u) {
+    if (curUser == null) return;
+    curUser!.friends.add(Friend(user: u));
+    St.save();
+    setState(() {});
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('${u.username} added!'), behavior: SnackBarBehavior.floating),
+    );
+  }
+
+  String _tl(DateTime t) {
+    final diff = DateTime.now().difference(t);
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m';
+    if (diff.inHours < 24)   return '${diff.inHours}h';
+    return '${diff.inDays}d';
+  }
+
+  @override
+  Widget build(BuildContext ctx) {
+    final d  = dark(ctx);
+    final sb = AC.sb(d);
+    final lt = AC.lt(d);
+    final fr = curUser?.friends ?? [];
+    return Scaffold(
+      body: Container(
+        decoration: gbg(d),
+        child: SafeArea(child: Column(children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 24, 0),
+            child: Row(children: [
+              IconButton(onPressed: () => Navigator.pop(ctx), icon: const Icon(Icons.arrow_back_ios_new_rounded), color: sb),
+              Text('Friends & Chat', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: sb)),
+            ]),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
+            child: TextField(
+              controller: _sc,
+              onChanged: (v) => setState(() => _q = v),
+              style: TextStyle(color: AC.mt(d), fontSize: 14),
+              decoration: InputDecoration(
+                hintText: 'Search users to add...',
+                hintStyle: TextStyle(color: lt, fontSize: 13),
+                prefixIcon: Icon(Icons.person_search_rounded, color: lt, size: 20),
+                filled: true, fillColor: AC.card(d),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              ),
+            ),
+          ),
+          if (_sugg.isNotEmpty)
+            SizedBox(
+              height: 56,
+              child: ListView.separated(
+                padding: const EdgeInsets.fromLTRB(20, 4, 20, 4),
+                scrollDirection: Axis.horizontal,
+                itemCount: _sugg.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 8),
+                itemBuilder: (_, i) {
+                  final u = _sugg[i];
+                  return GestureDetector(
+                    onTap: () => _add(u),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: AC.sage(d).withOpacity(0.3),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: AC.sage(d), width: 1.5),
+                      ),
+                      child: Row(mainAxisSize: MainAxisSize.min, children: [
+                        Text(u.emoji, style: const TextStyle(fontSize: 16)),
+                        const SizedBox(width: 6),
+                        Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.center, children: [
+                          Text(u.username, style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: sb)),
+                          Text(u.role.label, style: TextStyle(fontSize: 9, color: lt)),
+                        ]),
+                        const SizedBox(width: 8),
+                        Icon(Icons.add_circle_rounded, color: AC.peach(d), size: 18),
+                      ]),
+                    ),
+                  );
+                },
+              ),
+            ),
+          Container(
+            margin: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+            decoration: BoxDecoration(color: AC.card(d), borderRadius: BorderRadius.circular(12)),
+            child: TabBar(
+              controller: _tab,
+              labelColor: Colors.white,
+              unselectedLabelColor: lt,
+              labelStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+              indicator: BoxDecoration(color: AC.peach(d), borderRadius: BorderRadius.circular(10)),
+              tabs: const [Tab(text: 'Friends'), Tab(text: 'Find People')],
+            ),
+          ),
+          Expanded(child: TabBarView(controller: _tab, children: [
+            // Friends list
+            fr.isEmpty
+                ? Center(child: Text('No friends yet.\nSearch to add!', textAlign: TextAlign.center, style: TextStyle(color: lt, height: 1.6)))
+                : ListView.separated(
+                    padding: const EdgeInsets.all(16),
+                    itemCount: fr.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 8),
+                    itemBuilder: (_, i) {
+                      final f  = fr[i];
+                      final u  = f.user;
+                      final lm = f.msgs.isNotEmpty ? f.msgs.last : null;
+                      return GestureDetector(
+                        onTap: () => Navigator.push(ctx, MaterialPageRoute(builder: (_) => ChatScreen(fr: f))).then((_) => setState(() {})),
+                        child: Container(
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: AC.card(d), borderRadius: BorderRadius.circular(16),
+                            boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 8, offset: const Offset(0, 2))],
+                          ),
+                          child: Row(children: [
+                            Stack(children: [
+                              Container(
+                                width: 46, height: 46,
+                                decoration: BoxDecoration(gradient: LinearGradient(colors: [AC.peach(d), AC.sage(d)]), shape: BoxShape.circle),
+                                child: Center(child: Text(u.emoji, style: const TextStyle(fontSize: 22))),
+                              ),
+                              if (u.online) Positioned(right: 0, bottom: 0, child: Container(
+                                width: 12, height: 12,
+                                decoration: BoxDecoration(color: AC.online, shape: BoxShape.circle, border: Border.all(color: AC.card(d), width: 2)),
+                              )),
+                            ]),
+                            const SizedBox(width: 12),
+                            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                              Row(children: [
+                                Text(u.username, style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: sb)),
+                                const SizedBox(width: 6),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(color: AC.peach(d).withOpacity(0.15), borderRadius: BorderRadius.circular(6)),
+                                  child: Text(u.role.label, style: TextStyle(fontSize: 9, color: AC.peach(d))),
+                                ),
+                              ]),
+                              if (lm != null)
+                                Text(lm.text, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: lt))
+                              else
+                                Text('Tap to start chatting', style: TextStyle(fontSize: 12, color: lt, fontStyle: FontStyle.italic)),
+                            ])),
+                            Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                              if (lm != null) Text(_tl(lm.time), style: TextStyle(fontSize: 10, color: lt)),
+                              const SizedBox(height: 4),
+                              GestureDetector(
+                                onTap: () { setState(() => f.pinned = !f.pinned); St.save(); },
+                                child: Icon(f.pinned ? Icons.bookmark_rounded : Icons.bookmark_border_rounded,
+                                            color: f.pinned ? AC.peach(d) : lt, size: 18),
+                              ),
+                            ]),
+                          ]),
+                        ),
+                      );
+                    },
+                  ),
+            // Find people
+            ListView.separated(
+              padding: const EdgeInsets.all(16),
+              itemCount: kMock.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 8),
+              itemBuilder: (_, i) {
+                final u  = kMock[i];
+                final ia = curUser?.friends.any((f) => f.user.id == u.id) ?? false;
+                return Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(color: AC.card(d), borderRadius: BorderRadius.circular(16)),
+                  child: Row(children: [
+                    Container(
+                      width: 46, height: 46,
+                      decoration: BoxDecoration(gradient: LinearGradient(colors: [AC.peach(d), AC.sage(d)]), shape: BoxShape.circle),
+                      child: Center(child: Text(u.emoji, style: const TextStyle(fontSize: 22))),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(u.username, style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: sb)),
+                      Text(u.desc, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 11, color: lt)),
+                    ])),
+                    if (u.online) Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(color: AC.online.withOpacity(0.1), borderRadius: BorderRadius.circular(10)),
+                      child: Row(mainAxisSize: MainAxisSize.min, children: [
+                        Container(width: 6, height: 6, decoration: const BoxDecoration(color: AC.online, shape: BoxShape.circle)),
+                        const SizedBox(width: 4),
+                        Text('Online', style: TextStyle(fontSize: 10, color: AC.online, fontWeight: FontWeight.bold)),
+                      ]),
+                    ),
+                    const SizedBox(width: 8),
+                    GestureDetector(
+                      onTap: ia ? null : () => _add(u),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: ia ? AC.sage(d).withOpacity(0.2) : AC.peach(d),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(ia ? 'Added' : 'Add',
+                                   style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: ia ? AC.sage(d) : Colors.white)),
+                      ),
+                    ),
+                  ]),
+                );
+              },
+            ),
+          ])),
+        ])),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CHAT SCREEN
+// ─────────────────────────────────────────────────────────────────────────────
+class ChatScreen extends StatefulWidget {
+  final Friend fr;
+  const ChatScreen({super.key, required this.fr});
+  @override State<ChatScreen> createState() => _ChatS();
+}
+
+class _ChatS extends State<ChatScreen> {
+  final _c   = TextEditingController();
+  final _sc  = ScrollController();
+  @override void dispose() { _c.dispose(); _sc.dispose(); super.dispose(); }
+
+  void _send() {
+    if (_c.text.trim().isEmpty) return;
+    widget.fr.msgs.add(ChatMsg(sid: 'me', text: _c.text.trim(), time: DateTime.now()));
+    _c.clear();
+    setState(() {});
+    _scroll();
+    Future.delayed(const Duration(milliseconds: 1500), () {
+      if (!mounted) return;
+      final replies = [
+        'Thank you for the report!',
+        'Can you share the location?',
+        "We're on our way! 🐾",
+        'Photo received. We will help right away.',
+        'Please keep the animal safe until we arrive.',
+      ];
+      widget.fr.msgs.add(ChatMsg(
+        sid:  widget.fr.user.id,
+        text: replies[DateTime.now().millisecond % replies.length],
+        time: DateTime.now(),
+      ));
+      setState(() {});
+      _scroll();
+    });
+  }
+
+  void _scroll() {
+    Future.delayed(const Duration(milliseconds: 100), () {
+      if (_sc.hasClients) {
+        _sc.animateTo(_sc.position.maxScrollExtent,
+            duration: const Duration(milliseconds: 200), curve: Curves.easeOut);
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext ctx) {
+    final d  = dark(ctx);
+    final sb = AC.sb(d);
+    final lt = AC.lt(d);
+    final u  = widget.fr.user;
+    return Scaffold(
+      body: Container(
+        decoration: gbg(d),
+        child: SafeArea(child: Column(children: [
+          Container(
+            padding: const EdgeInsets.fromLTRB(8, 12, 16, 12),
+            color: AC.card(d),
+            child: Row(children: [
+              IconButton(onPressed: () => Navigator.pop(ctx), icon: const Icon(Icons.arrow_back_ios_new_rounded), color: sb),
+              Container(
+                width: 40, height: 40,
+                decoration: BoxDecoration(gradient: LinearGradient(colors: [AC.peach(d), AC.sage(d)]), shape: BoxShape.circle),
+                child: Center(child: Text(u.emoji, style: const TextStyle(fontSize: 20))),
+              ),
+              const SizedBox(width: 10),
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(u.username, style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: sb)),
+                Row(children: [
+                  if (u.online) Container(
+                    width: 6, height: 6,
+                    margin: const EdgeInsets.only(right: 4),
+                    decoration: const BoxDecoration(color: AC.online, shape: BoxShape.circle),
+                  ),
+                  Text(u.online ? 'Online' : u.role.label, style: TextStyle(fontSize: 11, color: u.online ? AC.online : lt)),
+                ]),
+              ])),
+              IconButton(
+                icon: Icon(widget.fr.pinned ? Icons.bookmark_rounded : Icons.bookmark_border_rounded,
+                            color: widget.fr.pinned ? AC.peach(d) : lt),
+                onPressed: () { setState(() => widget.fr.pinned = !widget.fr.pinned); St.save(); },
+              ),
+            ]),
+          ),
+          Expanded(child: widget.fr.msgs.isEmpty
+              ? Center(child: Text("Say hello to ${u.username}! 👋", style: TextStyle(color: lt, fontStyle: FontStyle.italic)))
+              : ListView.builder(
+                  controller: _sc,
+                  padding: const EdgeInsets.all(16),
+                  itemCount: widget.fr.msgs.length,
+                  itemBuilder: (_, i) {
+                    final m    = widget.fr.msgs[i];
+                    final isMe = m.sid == 'me';
+                    return Align(
+                      alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+                      child: Container(
+                        margin: const EdgeInsets.only(bottom: 8),
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                        constraints: BoxConstraints(maxWidth: MediaQuery.of(ctx).size.width * 0.72),
+                        decoration: BoxDecoration(
+                          color: isMe ? AC.peach(d) : AC.card(d),
+                          borderRadius: BorderRadius.only(
+                            topLeft:     const Radius.circular(16),
+                            topRight:    const Radius.circular(16),
+                            bottomLeft:  Radius.circular(isMe ? 16 : 4),
+                            bottomRight: Radius.circular(isMe ? 4  : 16),
+                          ),
+                        ),
+                        child: Column(crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start, children: [
+                          Text(m.text, style: TextStyle(fontSize: 14, color: isMe ? Colors.white : sb, height: 1.4)),
+                          const SizedBox(height: 4),
+                          Text(
+                            '${m.time.hour.toString().padLeft(2, '0')}:${m.time.minute.toString().padLeft(2, '0')}',
+                            style: TextStyle(fontSize: 10, color: isMe ? Colors.white70 : lt),
+                          ),
+                        ]),
+                      ),
+                    );
+                  },
+                )),
+          Container(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+            color: AC.card(d),
+            child: Row(children: [
+              Expanded(child: TextField(
+                controller: _c,
+                style: TextStyle(color: AC.mt(d), fontSize: 14),
+                decoration: InputDecoration(
+                  hintText: 'Type a message...',
+                  hintStyle: TextStyle(color: lt, fontSize: 13),
+                  filled: true, fillColor: AC.cream(d),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(20), borderSide: BorderSide.none),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                ),
+                onSubmitted: (_) => _send(),
+              )),
+              const SizedBox(width: 8),
+              GestureDetector(
+                onTap: _send,
+                child: Container(
+                  width: 42, height: 42,
+                  decoration: BoxDecoration(color: AC.peach(d), shape: BoxShape.circle),
+                  child: const Icon(Icons.send_rounded, color: Colors.white, size: 20),
+                ),
+              ),
+            ]),
+          ),
+        ])),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BOOKMARKS
+// ─────────────────────────────────────────────────────────────────────────────
+class BookmarksScreen extends StatefulWidget {
+  const BookmarksScreen({super.key});
+  @override State<BookmarksScreen> createState() => _BookS();
+}
+
+class _BookS extends State<BookmarksScreen> {
+  @override
+  Widget build(BuildContext ctx) {
+    final d     = dark(ctx);
+    final sb    = AC.sb(d);
+    final lt    = AC.lt(d);
+    final items = curUser?.bookmarks ?? [];
+    final bf    = curUser?.friends.where((f) => f.pinned).toList() ?? [];
+    return Scaffold(
+      body: Container(
+        decoration: gbg(d),
+        child: SafeArea(child: Column(children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 24, 8),
+            child: Row(children: [
+              IconButton(onPressed: () => Navigator.pop(ctx), icon: const Icon(Icons.arrow_back_ios_new_rounded), color: sb),
+              Text('Bookmarks', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: sb)),
+              const Spacer(),
+              const Text('📌', style: TextStyle(fontSize: 20)),
+            ]),
+          ),
+          Expanded(child: (items.isEmpty && bf.isEmpty)
+              ? Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  const Text('🔖', style: TextStyle(fontSize: 48)),
+                  const SizedBox(height: 12),
+                  Text('No bookmarks yet', style: TextStyle(fontSize: 16, color: sb, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 6),
+                  Text('Pin friends or save animal photos here', style: TextStyle(fontSize: 13, color: lt, fontStyle: FontStyle.italic)),
+                ]))
+              : ListView(padding: const EdgeInsets.all(16), children: [
+                  if (bf.isNotEmpty) ...[
+                    Text('Pinned Contacts', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: lt, letterSpacing: 1)),
+                    const SizedBox(height: 8),
+                    ...bf.map((f) => Container(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(color: AC.card(d), borderRadius: BorderRadius.circular(16)),
+                      child: Row(children: [
+                        Container(width: 44, height: 44,
+                          decoration: BoxDecoration(gradient: LinearGradient(colors: [AC.peach(d), AC.sage(d)]), shape: BoxShape.circle),
+                          child: Center(child: Text(f.user.emoji, style: const TextStyle(fontSize: 22)))),
+                        const SizedBox(width: 12),
+                        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Text(f.user.username, style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: sb)),
+                          Text(f.user.role.label, style: TextStyle(fontSize: 12, color: lt)),
+                        ])),
+                        GestureDetector(
+                          onTap: () { setState(() => f.pinned = false); St.save(); },
+                          child: Icon(Icons.bookmark_rounded, color: AC.peach(d), size: 20),
+                        ),
+                      ]),
+                    )),
+                    const SizedBox(height: 16),
+                  ],
+                  if (items.isNotEmpty) ...[
+                    Text('Saved Items', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: lt, letterSpacing: 1)),
+                    const SizedBox(height: 8),
+                    ...items.map((bm) => Container(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(color: AC.card(d), borderRadius: BorderRadius.circular(16)),
+                      child: Row(children: [
+                        Container(width: 44, height: 44,
+                          decoration: BoxDecoration(color: AC.blush(d).withOpacity(0.5), borderRadius: BorderRadius.circular(12)),
+                          child: Center(child: Text(bm.emoji, style: const TextStyle(fontSize: 24)))),
+                        const SizedBox(width: 12),
+                        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Text(bm.title, style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: sb)),
+                          Text(bm.subtitle, style: TextStyle(fontSize: 12, color: lt)),
+                        ])),
+                        GestureDetector(
+                          onTap: () { setState(() => curUser!.bookmarks.remove(bm)); St.save(); },
+                          child: Icon(Icons.delete_outline_rounded, color: Colors.redAccent.withOpacity(0.7), size: 20),
+                        ),
+                      ]),
+                    )),
+                  ],
+                ])),
+        ])),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SETTINGS
+// ─────────────────────────────────────────────────────────────────────────────
+class SettingsScreen extends StatelessWidget {
+  const SettingsScreen({super.key});
+  @override
+  Widget build(BuildContext ctx) {
+    return ValueListenableBuilder<bool>(
+      valueListenable: themeNotifier,
+      builder: (ctx, dv, _) {
+        final d  = dv;
+        final sb = AC.sb(d);
+        return Scaffold(
+          body: Container(
+            decoration: gbg(d),
+            child: SafeArea(child: Column(children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 24, 8),
+                child: Row(children: [
+                  IconButton(onPressed: () => Navigator.pop(ctx), icon: const Icon(Icons.arrow_back_ios_new_rounded), color: sb),
+                  Text('Settings', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: sb)),
+                ]),
+              ),
+              Expanded(child: ListView(padding: const EdgeInsets.all(20), children: [
+                slbl('Account', d),
+                stile(Icons.person_outline_rounded, 'Profile',        AC.peach(d).withOpacity(0.2), d, () => Navigator.pushNamed(ctx, '/profile')),
+                stile(Icons.people_outline_rounded, 'Friends & Chat', AC.sky(d).withOpacity(0.3),   d, () => Navigator.pushNamed(ctx, '/friends')),
+                stile(Icons.bookmark_border_rounded,'Bookmarks',      AC.lav(d).withOpacity(0.3),   d, () => Navigator.pushNamed(ctx, '/bookmarks')),
+                const SizedBox(height: 12),
+                slbl('Role', d),
+                ...UserRole.values.map((r) {
+                  final sel = curUser?.role == r;
+                  return GestureDetector(
+                    onTap: () async { curUser?.role = r; await St.save(); },
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      margin: const EdgeInsets.only(bottom: 8),
+                      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+                      decoration: BoxDecoration(
+                        color: sel ? AC.peach(d).withOpacity(0.15) : AC.card(d).withOpacity(0.5),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: sel ? AC.peach(d) : AC.blush(d), width: sel ? 2 : 1.5),
+                      ),
+                      child: Row(children: [
+                        Icon(r.icon, color: sel ? AC.peach(d) : sb, size: 22),
+                        const SizedBox(width: 14),
+                        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Text(r.label, style: TextStyle(fontSize: 15, color: sb, fontWeight: FontWeight.w500)),
+                          Text(r.desc,  style: TextStyle(fontSize: 11, color: AC.lt(d)), maxLines: 1, overflow: TextOverflow.ellipsis),
+                        ])),
+                        if (sel) Icon(Icons.check_circle, color: AC.peach(d), size: 20),
+                      ]),
+                    ),
+                  );
+                }),
+                const SizedBox(height: 12),
+                slbl('Appearance', d),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                  decoration: BoxDecoration(color: AC.lav(d).withOpacity(0.3), borderRadius: BorderRadius.circular(16)),
+                  child: Row(children: [
+                    Icon(Icons.dark_mode_outlined, color: sb, size: 22),
+                    const SizedBox(width: 14),
+                    Text('Dark Mode', style: TextStyle(fontSize: 15, color: sb, fontWeight: FontWeight.w500)),
+                    const Spacer(),
+                    Switch(
+                      value: d, activeColor: AC.peach(d),
+                      onChanged: (v) { themeNotifier.value = v; appDark = v; St.save(); },
+                    ),
+                  ]),
+                ),
+                const SizedBox(height: 12),
+                slbl('Legal', d),
+                stile(Icons.policy_outlined, 'Terms & Privacy', AC.sky(d).withOpacity(0.3), d, () => Navigator.pushNamed(ctx, '/terms')),
+                const SizedBox(height: 12),
+                slbl('Info', d),
+                stile(Icons.info_outline_rounded, 'About the App',      AC.blush(d).withOpacity(0.3), d, () => _dlg(ctx, d, false)),
+                stile(Icons.code_rounded,         'About the Developer', AC.sage(d).withOpacity(0.3),  d, () => _dlg(ctx, d, true)),
+                const SizedBox(height: 24),
+                if (curUser != null) Center(child: GestureDetector(
+                  onTap: () async {
+                    await St.clear();
+                    curUser = null;
+                    if (ctx.mounted) Navigator.pushNamedAndRemoveUntil(ctx, '/', (r) => false);
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 36, vertical: 14),
+                    decoration: BoxDecoration(
+                      color: Colors.redAccent.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: Colors.redAccent.withOpacity(0.4), width: 1.5),
+                    ),
+                    child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(Icons.logout_rounded, color: Colors.redAccent, size: 18),
+                      SizedBox(width: 8),
+                      Text('Log Out', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold, fontSize: 15)),
+                    ]),
+                  ),
+                )),
+              ])),
+            ])),
+          ),
+        );
+      },
+    );
+  }
+
+  void _dlg(BuildContext c, bool d, bool dev) {
+    showDialog(context: c, builder: (_) => AlertDialog(
+      backgroundColor: AC.card(d),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      title: Row(children: [
+        Text(dev ? '👨‍💻 ' : '🐾 ', style: const TextStyle(fontSize: 22)),
+        Text(dev ? 'Developer' : 'AL-AGAP', style: TextStyle(color: AC.sb(d), fontWeight: FontWeight.bold)),
+      ]),
+      content: Text(
+        dev
+          ? 'AL-AGAP is built with ❤️ for the animals of the Philippines.\n\nContact: alagap.philippines@gmail.com\n\nFlutter • OpenStreetMap • Overpass API • CARTO'
+          : 'AL-AGAP connects stray animals with nearby shelters, vets, and adoption centers.\n\nLog in daily to build your streak and earn coins! 🔥🪙',
+        style: TextStyle(color: AC.mt(d), height: 1.6, fontSize: 14),
+      ),
+      actions: [TextButton(
+        onPressed: () => Navigator.pop(c),
+        child: Text('Close', style: TextStyle(color: AC.peach(d), fontWeight: FontWeight.bold)),
+      )],
+    ));
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PROFILE
+// ─────────────────────────────────────────────────────────────────────────────
+class ProfileScreen extends StatefulWidget {
+  const ProfileScreen({super.key});
+  @override State<ProfileScreen> createState() => _ProfileS();
+}
+
+class _ProfileS extends State<ProfileScreen> {
+  late TextEditingController _dn, _bio;
+  bool _ed = false;
+  final _picker = ImagePicker();
+
+  @override void initState() {
+    super.initState();
+    _dn  = TextEditingController(text: curUser?.displayName ?? '');
+    _bio = TextEditingController(text: curUser?.bio ?? '');
+  }
+  @override void dispose() { _dn.dispose(); _bio.dispose(); super.dispose(); }
+
+  Future<void> _pickPhoto(ImageSource src) async {
+    final x = await _picker.pickImage(source: src, imageQuality: 50, maxWidth: 400, maxHeight: 400);
+    if (x == null) return;
+    final raw = await x.readAsBytes();
+    final cap = raw.length > 150 * 1024 ? Uint8List.fromList(raw.sublist(0, 150 * 1024)) : raw;
+    if (mounted) setState(() { curUser?.avBytes = cap; curUser?.avEmoji = null; });
+    await St.save();
+  }
+
+  void _showAvPicker() {
+    final d = dark(context);
+    showModalBottomSheet(
+      context: context, backgroundColor: Colors.transparent, isScrollControlled: true,
+      builder: (_) => DraggableScrollableSheet(
+        initialChildSize: .55, minChildSize: .4, maxChildSize: .85, expand: false,
+        builder: (_, sc) => Container(
+          decoration: BoxDecoration(color: AC.card(d), borderRadius: const BorderRadius.vertical(top: Radius.circular(28))),
+          child: ListView(controller: sc, padding: const EdgeInsets.fromLTRB(24, 12, 24, 32), children: [
+            Center(child: Container(
+              width: 40, height: 4, margin: const EdgeInsets.only(bottom: 20),
+              decoration: BoxDecoration(color: Colors.grey.shade400, borderRadius: BorderRadius.circular(2)),
+            )),
+            Text('Choose Avatar', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AC.sb(d))),
+            const SizedBox(height: 20),
+            Row(children: [
+              Expanded(child: _AbBtn(icon: Icons.photo_library_outlined, label: 'Gallery', color: AC.sky(d),
+                onTap: () { Navigator.pop(context); _pickPhoto(ImageSource.gallery); })),
+              const SizedBox(width: 12),
+              Expanded(child: _AbBtn(icon: Icons.camera_alt_outlined, label: 'Camera', color: AC.sage(d),
+                onTap: () { Navigator.pop(context); _pickPhoto(ImageSource.camera); })),
+            ]),
+            const SizedBox(height: 20),
+            Text('Or pick an animal avatar:', style: TextStyle(fontSize: 13, color: AC.lt(d), fontStyle: FontStyle.italic)),
+            const SizedBox(height: 12),
+            GridView.count(
+              crossAxisCount: 6, shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              crossAxisSpacing: 8, mainAxisSpacing: 8,
+              children: kAvatars.map((e) {
+                final sel = curUser?.avEmoji == e && curUser?.avBytes == null;
+                return GestureDetector(
+                  onTap: () async {
+                    setState(() { curUser?.avEmoji = e; curUser?.avBytes = null; });
+                    await St.save();
+                    if (mounted) { Navigator.pop(context); setState(() {}); }
+                  },
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 150),
+                    decoration: BoxDecoration(
+                      color: sel ? AC.peach(d).withOpacity(0.3) : AC.cream(d),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: sel ? AC.peach(d) : Colors.transparent, width: 2),
+                    ),
+                    child: Center(child: Text(e, style: const TextStyle(fontSize: 24))),
+                  ),
+                );
+              }).toList(),
+            ),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _save() async {
+    if (curUser != null) {
+      if (_dn.text.trim().isNotEmpty) {
+        curUser!.displayName = _dn.text.trim();
+        curUser!.username    = _dn.text.trim();
+      }
+      curUser!.bio = _bio.text.trim().isEmpty ? null : _bio.text.trim();
+    }
+    await St.save();
+    setState(() => _ed = false);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: const Text('Profile updated!'), backgroundColor: AC.sage(false), behavior: SnackBarBehavior.floating),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext ctx) {
+    final d  = dark(ctx);
+    final sb = AC.sb(d);
+    final lt = AC.lt(d);
+    final u  = curUser;
+    return Scaffold(
+      body: Container(
+        decoration: gbg(d),
+        child: SafeArea(child: Column(children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 24, 0),
+            child: Row(children: [
+              IconButton(onPressed: () => Navigator.pop(ctx), icon: const Icon(Icons.arrow_back_ios_new_rounded), color: sb),
+              Text('My Profile', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: sb)),
+              const Spacer(),
+              if (!_ed)
+                GestureDetector(
+                  onTap: () => setState(() => _ed = true),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                    decoration: BoxDecoration(color: AC.peach(d).withOpacity(0.15), borderRadius: BorderRadius.circular(20)),
+                    child: Text('Edit', style: TextStyle(color: AC.peach(d), fontWeight: FontWeight.bold, fontSize: 14)),
+                  ),
+                )
+              else
+                GestureDetector(
+                  onTap: _save,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                    decoration: BoxDecoration(color: AC.sage(d).withOpacity(0.3), borderRadius: BorderRadius.circular(20)),
+                    child: Text('Save', style: TextStyle(color: sb, fontWeight: FontWeight.bold, fontSize: 14)),
+                  ),
+                ),
+            ]),
+          ),
+          Expanded(child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: Column(children: [
+              Stack(alignment: Alignment.bottomRight, children: [
+                UAv(
+                  key: ValueKey('${u?.avBytes?.length ?? 0}_${u?.avEmoji ?? ""}'),
+                  u: u, sz: 100, fs: 42,
+                ),
+                GestureDetector(
+                  onTap: _showAvPicker,
+                  child: Container(
+                    width: 32, height: 32,
+                    decoration: BoxDecoration(
+                      color: AC.peach(d), shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white, width: 2),
+                      boxShadow: [BoxShadow(color: AC.peach(d).withOpacity(0.3), blurRadius: 8)],
+                    ),
+                    child: const Icon(Icons.edit_rounded, color: Colors.white, size: 16),
+                  ),
+                ),
+              ]),
+              const SizedBox(height: 12),
+              if (!_ed) ...[
+                Text(u?.displayName ?? u?.username ?? 'Guest',
+                     style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: sb)),
+                Container(
+                  margin: const EdgeInsets.only(top: 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                  decoration: BoxDecoration(color: AC.peach(d).withOpacity(0.15), borderRadius: BorderRadius.circular(10)),
+                  child: Text(u?.role.label ?? '', style: TextStyle(fontSize: 12, color: AC.peach(d), fontWeight: FontWeight.bold)),
+                ),
+                Text(u?.email ?? '', style: TextStyle(fontSize: 13, color: lt)),
+                if (u?.bio != null) ...[
+                  const SizedBox(height: 8),
+                  Text(u!.bio!, textAlign: TextAlign.center,
+                       style: TextStyle(fontSize: 14, color: AC.mt(d), fontStyle: FontStyle.italic)),
+                ],
+              ],
+              const SizedBox(height: 20),
+              // Streak card
+              if (u != null) Container(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                margin: const EdgeInsets.only(bottom: 16),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(colors: [AC.streak.withOpacity(0.1), AC.blush(d).withOpacity(0.2)]),
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(color: AC.streak.withOpacity(0.3), width: 1.5),
+                ),
+                child: Row(children: [
+                  const Text('🔥', style: TextStyle(fontSize: 28)),
+                  const SizedBox(width: 12),
+                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text('${u.streak} Day Streak', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: sb)),
+                    Text(u.streak > 0 ? 'Tomorrow: +${math.min(u.streak + 1, 7)} coins' : 'Log in daily for bonuses!',
+                         style: TextStyle(fontSize: 12, color: lt)),
+                  ])),
+                  GestureDetector(
+                    onTap: () async { await St.resetStreak(); setState(() {}); },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: Colors.redAccent.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.redAccent.withOpacity(0.3), width: 1),
+                      ),
+                      child: const Text('Reset', style: TextStyle(fontSize: 11, color: Colors.redAccent, fontWeight: FontWeight.bold)),
+                    ),
+                  ),
+                ]),
+              ),
+              CoinCal(u: u, d: d),
+              const SizedBox(height: 20),
+              if (_ed) ...[
+                fld(_dn, 'Display Name', Icons.person_outline_rounded, d),
+                const SizedBox(height: 14),
+                fld(_bio, 'Bio', Icons.edit_outlined, d, lines: 3),
+                const SizedBox(height: 20),
+              ],
+              Row(children: [
+                Expanded(child: _SC(label: 'Reports',   val: '${u?.reports   ?? 0}', emoji: '📍', col: AC.sky(d).withOpacity(0.4),  d: d)),
+                const SizedBox(width: 14),
+                Expanded(child: _SC(label: 'Adoptions', val: '${u?.adoptions ?? 0}', emoji: '🏠', col: AC.sage(d).withOpacity(0.4), d: d)),
+              ]),
+              const SizedBox(height: 32),
+            ]),
+          )),
+        ])),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ADOPT SCREEN
+// ─────────────────────────────────────────────────────────────────────────────
+class AdoptScreen extends StatelessWidget {
+  const AdoptScreen({super.key});
+  @override
+  Widget build(BuildContext ctx) {
+    final arg = ModalRoute.of(ctx)?.settings.arguments as ImageArg?;
+    final d   = dark(ctx);
+    final sb  = AC.sb(d);
+    final steps = [
+      _Stp('01','🩺','Visit a Veterinarian',   'Licensed vet exam, health certificate, microchip check.',           AC.blush(d)),
+      _Stp('02','📋','Register the Animal',     'City hall registration. Valid ID and vet certificate.',             AC.sage(d).withOpacity(0.6)),
+      _Stp('03','💉','Vaccinations',            'Anti-rabies, distemper vaccines and deworming.',                   AC.sky(d).withOpacity(0.6)),
+      _Stp('04','📝','Adoption Papers',         'Shelter agreement with home inspection consent.',                  AC.lav(d).withOpacity(0.6)),
+      _Stp('05','🏡','Prepare Your Home',       'Safe space with food, water, bedding.',                            AC.peach(d).withOpacity(0.5)),
+      _Stp('06','💛','Ongoing Healthcare',      'Vet check-ups every 6 months. Updated records.',                   AC.sage(d).withOpacity(0.4)),
+    ];
+    return Scaffold(
+      body: Container(
+        decoration: gbg(d),
+        child: SafeArea(child: Column(children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 24, 0),
+            child: Row(children: [
+              IconButton(onPressed: () => Navigator.pop(ctx), icon: const Icon(Icons.arrow_back_ios_new_rounded), color: sb),
+              Text('Adopt an Animal', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: sb)),
+            ]),
+          ),
+          Expanded(child: ListView(padding: const EdgeInsets.all(20), children: [
+            if (arg != null && arg.has)
+              Container(
+                height: 180, margin: const EdgeInsets.only(bottom: 20),
+                decoration: BoxDecoration(borderRadius: BorderRadius.circular(20),
+                  boxShadow: [BoxShadow(color: AC.peach(d).withOpacity(0.3), blurRadius: 16, offset: const Offset(0, 6))]),
+                child: ClipRRect(borderRadius: BorderRadius.circular(20), child: bImg(arg)),
+              ),
+            Container(
+              padding: const EdgeInsets.all(16), margin: const EdgeInsets.only(bottom: 20),
+              decoration: BoxDecoration(color: AC.blush(d).withOpacity(0.5), borderRadius: BorderRadius.circular(16)),
+              child: Row(children: [
+                const Text('🐶', style: TextStyle(fontSize: 28)),
+                const SizedBox(width: 12),
+                Expanded(child: Text('Follow these steps for a safe and legal adoption.',
+                                     style: TextStyle(fontSize: 13, color: AC.mt(d), height: 1.5))),
+              ]),
+            ),
+            ...steps.map((s) => Container(
+              margin: const EdgeInsets.only(bottom: 14), padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(color: s.c, borderRadius: BorderRadius.circular(18),
+                boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 8, offset: const Offset(0, 3))]),
+              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Column(children: [
+                  Text(s.i, style: const TextStyle(fontSize: 28)),
+                  const SizedBox(height: 4),
+                  Text(s.n, style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AC.lt(d), letterSpacing: 1)),
+                ]),
+                const SizedBox(width: 16),
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(s.t, style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: sb)),
+                  const SizedBox(height: 6),
+                  Text(s.d, style: TextStyle(fontSize: 13, color: AC.mt(d), height: 1.5)),
+                ])),
+              ]),
+            )),
+            const SizedBox(height: 12),
+          ])),
+        ])),
+      ),
+    );
+  }
+}
+
+class _Stp {
+  final String n, i, t, d;
+  final Color  c;
+  _Stp(this.n, this.i, this.t, this.d, this.c);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REPORT SCREEN
+// ─────────────────────────────────────────────────────────────────────────────
+class ReportScreen extends StatefulWidget {
+  const ReportScreen({super.key});
+  @override State<ReportScreen> createState() => _ReportS();
+}
+
+class _ReportS extends State<ReportScreen> {
+  LatLng?         _loc;
+  bool            _locating = true;
+  String          _locErr   = '';
+  double          _radius   = 10.0;
+  List<OrgPin>    _orgs     = [];
+  bool            _fetching = false;
+  OrgPin?         _sel;
+  MapFilter       _filter   = MapFilter.all;
+  final _sc   = TextEditingController();
+  bool            _showS    = false;
+  bool            _searching = false;
+  List<OrgPin>    _sRes     = [];
+  List<String>    _hist     = [];
+  List<String>    _sugg     = [];
+
+  @override void initState() { super.initState(); _init(); }
+  @override void dispose()   { _sc.dispose(); super.dispose(); }
+
+  Future<void> _init() async {
+    final h = await St.hist();
+    setState(() => _hist = h);
+    await _getLoc();
+  }
+
+  Future<void> _getLoc() async {
+    setState(() { _locating = true; _locErr = ''; });
+    try {
+      if (!await Geolocator.isLocationServiceEnabled()) {
+        setState(() { _locating = false; _locErr = 'Location services disabled.'; });
+        return;
+      }
+      var p = await Geolocator.checkPermission();
+      if (p == LocationPermission.denied) p = await Geolocator.requestPermission();
+      if (p == LocationPermission.denied || p == LocationPermission.deniedForever) {
+        setState(() { _locating = false; _locErr = 'Location permission denied.'; });
+        return;
+      }
+      final pos = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
+      setState(() { _loc = LatLng(pos.latitude, pos.longitude); _locating = false; });
+      await _fetchOrgs();
+    } catch (e) {
+      setState(() { _locating = false; _locErr = 'Could not get location: $e'; });
+    }
+  }
+
+  Future<void> _fetchOrgs() async {
+    if (_loc == null) return;
+    setState(() => _fetching = true);
+    final o = await fetchOrgs(_loc!, _radius, _filter);
+    setState(() { _orgs = o; _fetching = false; });
+  }
+
+  Future<void> _onQ(String q) async {
+    if (q.trim().length < 2) { setState(() => _sugg = []); return; }
+    final s = await suggest(q);
+    setState(() => _sugg = s);
+  }
+
+  Future<void> _doSearch(String q) async {
+    if (q.trim().isEmpty) return;
+    _sc.text = q;
+    FocusScope.of(context).unfocus();
+    await St.addHist(q);
+    final h = await St.hist();
+    setState(() { _searching = true; _hist = h; _sugg = []; });
+    final r = await searchNom(q, _loc);
+    setState(() { _sRes = r; _searching = false; });
+  }
+
+  Future<void> _email(OrgPin o) async {
+    final sub  = Uri.encodeComponent('Animal Report - AL-AGAP');
+    final body = Uri.encodeComponent(
+      'Hello,\n\nReporting a stray animal at (${_loc?.latitude.toStringAsFixed(5)}, ${_loc?.longitude.toStringAsFixed(5)}).\n\nVia AL-AGAP.\n\nThank you.',
+    );
+    final u = Uri.parse('mailto:?subject=$sub&body=$body');
+    if (await canLaunchUrl(u)) await launchUrl(u);
+    else _snack('Could not open email.');
+  }
+
+  Future<void> _sms(OrgPin o) async {
+    final body = Uri.encodeComponent(
+      'Hi! Found stray animal near ${_loc?.latitude.toStringAsFixed(5)},${_loc?.longitude.toStringAsFixed(5)}. Via AL-AGAP.',
+    );
+    final u = Uri.parse('sms:${o.phone ?? ''}?body=$body');
+    if (await canLaunchUrl(u)) await launchUrl(u);
+    else _snack('SMS not supported on web.');
+  }
+
+  void _snack(String m) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+
+  void _sheet(OrgPin o) {
+    setState(() => _sel = o);
+    showModalBottomSheet(
+      context: context, backgroundColor: Colors.transparent, isScrollControlled: true,
+      builder: (_) => _OrgSheet(
+        org: o, d: dark(context),
+        onEmail: () { Navigator.pop(context); _email(o); },
+        onSMS:   () { Navigator.pop(context); _sms(o);   },
+        onWeb:   o.website != null ? () { Navigator.pop(context); launchUrl(Uri.parse(o.website!), mode: LaunchMode.externalApplication); } : null,
+      ),
+    );
+  }
+
+  List<OrgPin> get _disp => _showS && _sRes.isNotEmpty ? _sRes : _orgs;
+
+  @override
+  Widget build(BuildContext ctx) {
+    final arg = ModalRoute.of(ctx)?.settings.arguments as ImageArg?;
+    final d   = dark(ctx);
+    final sb  = AC.sb(d);
+    final lt  = AC.lt(d);
+    return Scaffold(
+      body: Container(
+        decoration: gbg(d),
+        child: SafeArea(child: LayoutBuilder(builder: (ctx2, cons) {
+          final total  = cons.maxHeight;
+          const hH     = 50.0;
+          final sH     = _showS ? (_sugg.isNotEmpty || _hist.isNotEmpty ? 108.0 : 52.0) : 0.0;
+          final pxH    = (arg != null && arg.has) ? 80.0 : 0.0;
+          const rH     = 44.0;
+          const fH     = 46.0;
+          const orgH   = 160.0;
+          final mapH   = (total - hH - sH - pxH - rH - fH - orgH).clamp(80.0, double.infinity);
+
+          return Column(children: [
+            // Header
+            SizedBox(height: hH, child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+              child: Row(children: [
+                IconButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  icon: const Icon(Icons.arrow_back_ios_new_rounded), color: sb,
+                  padding: EdgeInsets.zero, constraints: const BoxConstraints(),
+                ),
+                const SizedBox(width: 4),
+                Text('Report Animal', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: sb)),
+                const Spacer(),
+                IconButton(
+                  icon: Icon(_showS ? Icons.close : Icons.search, color: sb),
+                  padding: EdgeInsets.zero, constraints: const BoxConstraints(),
+                  onPressed: () => setState(() {
+                    _showS = !_showS;
+                    if (!_showS) { _sRes = []; _sc.clear(); _sugg = []; }
+                  }),
+                ),
+              ]),
+            )),
+
+            // Search bar
+            if (_showS) SizedBox(height: sH, child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                TextField(
+                  controller: _sc,
+                  style: TextStyle(color: AC.mt(d), fontSize: 13),
+                  onChanged: _onQ,
+                  onSubmitted: _doSearch,
+                  decoration: InputDecoration(
+                    hintText: 'Search shelters, vets, barangay...',
+                    hintStyle: TextStyle(color: lt, fontSize: 12),
+                    prefixIcon: Icon(Icons.search, color: lt, size: 18),
+                    suffixIcon: _searching
+                        ? Padding(padding: const EdgeInsets.all(10),
+                            child: SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: AC.peach(d))))
+                        : null,
+                    filled: true, fillColor: AC.card(d),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  ),
+                ),
+                SizedBox(height: 46, child: _sugg.isNotEmpty
+                    ? ListView.separated(
+                        scrollDirection: Axis.horizontal,
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        itemCount: _sugg.length,
+                        separatorBuilder: (_, __) => const SizedBox(width: 6),
+                        itemBuilder: (_, i) => GestureDetector(
+                          onTap: () => _doSearch(_sugg[i]),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(color: AC.sky(d).withOpacity(0.4), borderRadius: BorderRadius.circular(20)),
+                            child: Row(mainAxisSize: MainAxisSize.min, children: [
+                              Icon(Icons.location_on, size: 12, color: sb),
+                              const SizedBox(width: 4),
+                              Text(_sugg[i], style: TextStyle(fontSize: 11, color: sb)),
+                            ]),
+                          ),
+                        ),
+                      )
+                    : (_hist.isNotEmpty && _sRes.isEmpty)
+                        ? ListView.separated(
+                            scrollDirection: Axis.horizontal,
+                            padding: const EdgeInsets.symmetric(vertical: 4),
+                            itemCount: _hist.length,
+                            separatorBuilder: (_, __) => const SizedBox(width: 6),
+                            itemBuilder: (_, i) => GestureDetector(
+                              onTap: () => _doSearch(_hist[i]),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                decoration: BoxDecoration(color: AC.blush(d).withOpacity(0.4), borderRadius: BorderRadius.circular(20)),
+                                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                                  Icon(Icons.history, size: 12, color: sb),
+                                  const SizedBox(width: 4),
+                                  Text(_hist[i], style: TextStyle(fontSize: 11, color: sb)),
+                                ]),
+                              ),
+                            ),
+                          )
+                        : const SizedBox.shrink()),
+              ]),
+            )),
+
+            // Photo strip
+            if (arg != null && arg.has)
+              SizedBox(height: pxH, child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+                child: ClipRRect(borderRadius: BorderRadius.circular(12), child: bImg(arg)),
+              )),
+
+            // Radius slider
+            SizedBox(height: rH, child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(children: [
+                Text('Radius:', style: TextStyle(fontSize: 11, color: lt)),
+                const SizedBox(width: 6),
+                Expanded(child: SliderTheme(
+                  data: SliderThemeData(
+                    trackHeight: 3,
+                    thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
+                    overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
+                  ),
+                  child: Slider(
+                    value: _radius, min: 10, max: 100, divisions: 9,
+                    activeColor: AC.peach(d), inactiveColor: AC.blush(d).withOpacity(0.4),
+                    onChanged: (v) => setState(() => _radius = v),
+                    onChangeEnd: (_) => _fetchOrgs(),
+                  ),
+                )),
+                Text('${_radius.toInt()} km', style: TextStyle(fontSize: 11, color: lt, fontWeight: FontWeight.bold)),
+                if (_fetching) Padding(
+                  padding: const EdgeInsets.only(left: 6),
+                  child: SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2, color: AC.peach(d))),
+                ),
+              ]),
+            )),
+
+            // Filter chips
+            SizedBox(height: fH, child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+              itemCount: MapFilter.values.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 6),
+              itemBuilder: (_, i) {
+                final f   = MapFilter.values[i];
+                final sel = _filter == f;
+                return GestureDetector(
+                  onTap: () { setState(() => _filter = f); _fetchOrgs(); },
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: sel ? AC.peach(d) : AC.card(d),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: sel ? AC.peach(d) : AC.blush(d), width: 1.5),
+                    ),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Text(f.emoji, style: const TextStyle(fontSize: 14)),
+                      const SizedBox(width: 4),
+                      Text(f.label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: sel ? Colors.white : sb)),
+                    ]),
+                  ),
+                );
+              },
+            )),
+
+            // Map
+            SizedBox(height: mapH, child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(18),
+                child: _locating ? _lw(d) : _locErr.isNotEmpty ? _ew(d)
+                    : FlutterMap(
+                        options: MapOptions(
+                          initialCenter: _loc!,
+                          initialZoom: 14 - math.log(_radius / 10) / math.log(2),
+                        ),
+                        children: [
+                          TileLayer(
+                            urlTemplate: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+                            subdomains: const ['a','b','c','d'],
+                            userAgentPackageName: 'com.alagap.app',
+                            maxZoom: 20,
+                          ),
+                          RichAttributionWidget(animationConfig: const ScaleRAWA(), attributions: [
+                            TextSourceAttribution('© OpenStreetMap contributors',
+                              onTap: () => launchUrl(Uri.parse('https://openstreetmap.org/copyright'), mode: LaunchMode.externalApplication)),
+                            TextSourceAttribution('© CARTO',
+                              onTap: () => launchUrl(Uri.parse('https://carto.com/attributions'), mode: LaunchMode.externalApplication)),
+                          ]),
+                          MarkerLayer(markers: [
+                            Marker(point: _loc!, width: 40, height: 40, child: Container(
+                              decoration: BoxDecoration(
+                                color: AC.peach(d), shape: BoxShape.circle,
+                                border: Border.all(color: Colors.white, width: 3),
+                                boxShadow: [BoxShadow(color: AC.peach(d).withOpacity(0.5), blurRadius: 10)],
+                              ),
+                              child: const Icon(Icons.person_pin_rounded, color: Colors.white, size: 20),
+                            )),
+                            ..._disp.map((o) => Marker(
+                              point: o.pos, width: 46, height: 46,
+                              child: GestureDetector(
+                                onTap: () => _sheet(o),
+                                child: AnimatedContainer(
+                                  duration: const Duration(milliseconds: 200),
+                                  decoration: BoxDecoration(
+                                    color: _sel == o ? AC.sb(d) : o.type.pc(d),
+                                    shape: BoxShape.circle,
+                                    border: Border.all(color: _sel == o ? Colors.white : AC.peach(d), width: 2),
+                                    boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.15), blurRadius: 8, offset: const Offset(0, 3))],
+                                  ),
+                                  child: Center(child: Text(o.type.emoji, style: const TextStyle(fontSize: 20))),
+                                ),
+                              ),
+                            )),
+                          ]),
+                        ],
+                      ),
+              ),
+            )),
+
+            // Org list — ConstrainedBox+Flexible = zero overflow
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: orgH),
+              child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 6, 16, 4),
+                  child: Text(
+                    _showS && _sRes.isNotEmpty ? 'Search Results' : 'Nearby (${_disp.length})',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: sb),
+                  ),
+                ),
+                Flexible(child: _locating ? const SizedBox() : _disp.isEmpty
+                    ? Center(child: Padding(padding: const EdgeInsets.all(8), child: Text(
+                        'No organizations found. Try increasing radius or changing filter.',
+                        style: TextStyle(fontSize: 11, color: lt), textAlign: TextAlign.center)))
+                    : ListView.separated(
+                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                        scrollDirection: Axis.horizontal,
+                        itemCount: _disp.length,
+                        separatorBuilder: (_, __) => const SizedBox(width: 8),
+                        itemBuilder: (_, i) {
+                          final o   = _disp[i];
+                          final sel = _sel == o;
+                          return GestureDetector(
+                            onTap: () => _sheet(o),
+                            child: AnimatedContainer(
+                              duration: const Duration(milliseconds: 200),
+                              width: 112, padding: const EdgeInsets.all(9),
+                              decoration: BoxDecoration(
+                                color: sel ? o.type.pc(d).withOpacity(0.9) : o.type.pc(d).withOpacity(0.5),
+                                borderRadius: BorderRadius.circular(13),
+                                border: Border.all(color: sel ? AC.sb(d).withOpacity(0.5) : Colors.transparent, width: 2),
+                              ),
+                              child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.center, children: [
+                                Text(o.type.emoji, style: const TextStyle(fontSize: 18)),
+                                const SizedBox(height: 3),
+                                Text(o.name, maxLines: 2, overflow: TextOverflow.ellipsis,
+                                     style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: sb)),
+                                Text(o.type.label, maxLines: 1, overflow: TextOverflow.ellipsis,
+                                     style: TextStyle(fontSize: 9, color: lt)),
+                                Text(o.dist, style: TextStyle(fontSize: 9, color: lt)),
+                                const SizedBox(height: 3),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(color: Colors.white.withOpacity(0.6), borderRadius: BorderRadius.circular(8)),
+                                  child: Text('Contact', style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: sb)),
+                                ),
+                              ]),
+                            ),
+                          );
+                        },
+                      )),
+              ]),
+            ),
+          ]);
+        })),
+      ),
+    );
+  }
+
+  Widget _lw(bool d) => Container(color: AC.sky(d).withOpacity(0.2), child: Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+    CircularProgressIndicator(color: AC.peach(d)),
+    const SizedBox(height: 12),
+    Text('Getting your location...', style: TextStyle(color: AC.mt(d))),
+  ])));
+
+  Widget _ew(bool d) => Container(color: AC.blush(d).withOpacity(0.3), child: Center(child: Padding(padding: const EdgeInsets.all(24), child: Column(mainAxisSize: MainAxisSize.min, children: [
+    const Text('📍', style: TextStyle(fontSize: 40)),
+    const SizedBox(height: 12),
+    Text(_locErr, textAlign: TextAlign.center, style: TextStyle(color: AC.mt(d))),
+    const SizedBox(height: 16),
+    GestureDetector(
+      onTap: _getLoc,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+        decoration: BoxDecoration(color: AC.peach(d), borderRadius: BorderRadius.circular(20)),
+        child: const Text('Retry', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+      ),
+    ),
+  ]))));
+}
+
+// Org bottom sheet
+class _OrgSheet extends StatelessWidget {
+  final OrgPin     org;
+  final bool       d;
+  final VoidCallback onEmail, onSMS;
+  final VoidCallback? onWeb;
+  const _OrgSheet({required this.org, required this.d, required this.onEmail, required this.onSMS, this.onWeb});
+
+  @override
+  Widget build(BuildContext ctx) {
+    final sb = AC.sb(d);
+    final lt = AC.lt(d);
+    final mt = AC.mt(d);
+    return Container(
+      margin: const EdgeInsets.all(16), padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: AC.card(d), borderRadius: BorderRadius.circular(28),
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.15), blurRadius: 20, offset: const Offset(0, -4))],
+      ),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Container(width: 40, height: 4,
+          decoration: BoxDecoration(color: Colors.grey.shade400, borderRadius: BorderRadius.circular(2))),
+        const SizedBox(height: 20),
+        Row(children: [
+          Container(width: 56, height: 56,
+            decoration: BoxDecoration(color: org.type.pc(d), borderRadius: BorderRadius.circular(16)),
+            child: Center(child: Text(org.type.emoji, style: const TextStyle(fontSize: 28)))),
+          const SizedBox(width: 16),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(org.name, style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: sb), maxLines: 2, overflow: TextOverflow.ellipsis),
+            const SizedBox(height: 3),
+            Text(org.type.label, style: TextStyle(fontSize: 13, color: lt)),
+            Text('📍 ${org.dist} away', style: TextStyle(fontSize: 12, color: lt)),
+            if (org.phone != null) Text('📞 ${org.phone}', style: TextStyle(fontSize: 11, color: mt)),
+          ])),
+        ]),
+        const SizedBox(height: 20),
+        Text('Send animal report via:', style: TextStyle(fontSize: 14, color: mt, fontWeight: FontWeight.w500)),
+        const SizedBox(height: 14),
+        IntrinsicHeight(child: Row(children: [
+          Expanded(child: _CBtn(icon: Icons.email_rounded,    label: 'Email',   col: AC.sky(d),  d: d, t: onEmail)),
+          const SizedBox(width: 10),
+          Expanded(child: _CBtn(icon: Icons.sms_rounded,     label: 'SMS',     col: AC.sage(d), d: d, t: onSMS)),
+          if (onWeb != null) ...[
+            const SizedBox(width: 10),
+            Expanded(child: _CBtn(icon: Icons.language_rounded, label: 'Website', col: AC.lav(d),  d: d, t: onWeb!)),
+          ],
+        ])),
+        const SizedBox(height: 8),
+      ]),
+    );
+  }
+}
+
+class _CBtn extends StatelessWidget {
+  final IconData icon; final String label; final Color col; final bool d; final VoidCallback t;
+  const _CBtn({required this.icon, required this.label, required this.col, required this.d, required this.t});
+  @override
+  Widget build(BuildContext ctx) => GestureDetector(
+    onTap: t,
+    child: Container(
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+      decoration: BoxDecoration(color: col.withOpacity(0.35), borderRadius: BorderRadius.circular(16), border: Border.all(color: col, width: 1.5)),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Icon(icon, color: AC.sb(d), size: 24),
+        const SizedBox(height: 4),
+        Text(label, style: TextStyle(fontWeight: FontWeight.bold, color: AC.sb(d), fontSize: 12), textAlign: TextAlign.center),
+      ]),
+    ),
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SMALL SHARED WIDGETS
+// ─────────────────────────────────────────────────────────────────────────────
+class _AC extends StatefulWidget {
+  final String emoji, label, sub;
+  final Color  color;
+  final VoidCallback onTap;
+  const _AC({required this.emoji, required this.label, required this.sub, required this.color, required this.onTap});
+  @override State<_AC> createState() => _ACS();
+}
+
+class _ACS extends State<_AC> with SingleTickerProviderStateMixin {
+  late AnimationController _c;
+  late Animation<double>   _s;
+  @override void initState() {
+    super.initState();
+    _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 120));
+    _s = Tween(begin: 1.0, end: .95).animate(_c);
+  }
+  @override void dispose() { _c.dispose(); super.dispose(); }
+
+  @override
+  Widget build(BuildContext ctx) {
+    final d = dark(ctx);
+    return GestureDetector(
+      onTapDown:   (_) => _c.forward(),
+      onTapUp:     (_) { _c.reverse(); widget.onTap(); },
+      onTapCancel: ()  => _c.reverse(),
+      child: ScaleTransition(scale: _s, child: Container(
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+          color: widget.color, borderRadius: BorderRadius.circular(20),
+          boxShadow: [BoxShadow(color: widget.color.withOpacity(0.4), blurRadius: 12, offset: const Offset(0, 5))],
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(widget.emoji, style: const TextStyle(fontSize: 28)),
+          const SizedBox(height: 8),
+          Text(widget.label, style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AC.sb(d))),
+          const SizedBox(height: 3),
+          Text(widget.sub,   style: TextStyle(fontSize: 11, color: AC.mt(d))),
+        ]),
+      )),
+    );
+  }
+}
+
+class _HC extends StatelessWidget {
+  final String emoji, title, desc;
+  final Color  color;
+  final bool   d;
+  const _HC({required this.emoji, required this.title, required this.desc, required this.color, required this.d});
+  @override
+  Widget build(BuildContext ctx) => Container(
+    padding: const EdgeInsets.all(16),
+    decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(16)),
+    child: Row(children: [
+      Text(emoji, style: const TextStyle(fontSize: 26)),
+      const SizedBox(width: 12),
+      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(title, style: TextStyle(fontWeight: FontWeight.bold, color: AC.sb(d), fontSize: 14)),
+        const SizedBox(height: 2),
+        Text(desc,  style: TextStyle(fontSize: 11, color: AC.mt(d))),
+      ])),
+    ]),
+  );
+}
+
+class _AbBtn extends StatelessWidget {
+  final IconData icon; final String label; final Color color; final VoidCallback onTap;
+  const _AbBtn({required this.icon, required this.label, required this.color, required this.onTap});
+  @override
+  Widget build(BuildContext ctx) => GestureDetector(
+    onTap: onTap,
+    child: Container(
+      padding: const EdgeInsets.symmetric(vertical: 14),
+      decoration: BoxDecoration(color: color.withOpacity(0.4), borderRadius: BorderRadius.circular(14), border: Border.all(color: color, width: 1.5)),
+      child: Column(children: [
+        Icon(icon,  color: AC.sb(false), size: 26),
+        const SizedBox(height: 6),
+        Text(label, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AC.sb(false))),
+      ]),
+    ),
+  );
+}
+
+class _SC extends StatelessWidget {
+  final String label, val, emoji;
+  final Color  col;
+  final bool   d;
+  const _SC({required this.label, required this.val, required this.emoji, required this.col, required this.d});
+  @override
+  Widget build(BuildContext ctx) => Container(
+    padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 14),
+    decoration: BoxDecoration(color: col, borderRadius: BorderRadius.circular(16)),
+    child: Column(children: [
+      Text(emoji, style: const TextStyle(fontSize: 26)),
+      const SizedBox(height: 6),
+      Text(val,   style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: AC.sb(d))),
+      const SizedBox(height: 3),
+      Text(label, style: TextStyle(fontSize: 11, color: AC.lt(d))),
+    ]),
+  );
+}

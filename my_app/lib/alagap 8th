@@ -1,0 +1,1537 @@
+import 'dart:convert';
+import 'dart:io';
+import 'dart:math' as math;
+import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:http/http.dart' as http;
+import 'package:image_picker/image_picker.dart';
+import 'package:latlong2/latlong.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THEME NOTIFIER — single source of truth for dark mode
+// ═══════════════════════════════════════════════════════════════════════════
+final themeNotifier = ValueNotifier<bool>(false);
+
+// ═══════════════════════════════════════════════════════════════════════════
+// COLOR SYSTEM
+// ═══════════════════════════════════════════════════════════════════════════
+class AC {
+  static Color cream(bool d)     => d ? const Color(0xFF2A2420) : const Color(0xFFFFF8F0);
+  static Color card(bool d)      => d ? const Color(0xFF332E2A) : Colors.white;
+  static Color blush(bool d)     => d ? const Color(0xFF5A3530) : const Color(0xFFFFD6CC);
+  static Color peach(bool d)     => d ? const Color(0xFFE8846A) : const Color(0xFFFFB5A0);
+  static Color sage(bool d)      => d ? const Color(0xFF4A6B5A) : const Color(0xFFB5D5C5);
+  static Color sky(bool d)       => d ? const Color(0xFF2E4A6A) : const Color(0xFFBFDEF5);
+  static Color lavender(bool d)  => d ? const Color(0xFF3A3060) : const Color(0xFFD8CCF0);
+  static Color softBrown(bool d) => d ? const Color(0xFFD4B8A8) : const Color(0xFF8B6F5E);
+  static Color mutedText(bool d) => d ? const Color(0xFFB8A89A) : const Color(0xFF6B5B52);
+  static Color lightText(bool d) => d ? const Color(0xFF8A7A72) : const Color(0xFF9C8B84);
+  static Color bg1(bool d)       => d ? const Color(0xFF1A1612) : const Color(0xFFFFF0E8);
+  static Color bg2(bool d)       => d ? const Color(0xFF1A1A2A) : const Color(0xFFF5EEF8);
+  static const gold = Color(0xFFFFD700);
+  static const streak = Color(0xFFFF6B35);
+}
+
+BoxDecoration gradBg(bool d) => BoxDecoration(gradient: LinearGradient(
+  begin: Alignment.topCenter, end: Alignment.bottomCenter,
+  colors: [AC.bg1(d), AC.bg2(d)]));
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THEME DATA
+// ═══════════════════════════════════════════════════════════════════════════
+ThemeData _light() => ThemeData(
+  brightness: Brightness.light, useMaterial3: true, fontFamily: 'Georgia',
+  scaffoldBackgroundColor: const Color(0xFFFFF8F0),
+  colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFFFFB5A0)));
+
+ThemeData _dark() => ThemeData(
+  brightness: Brightness.dark, useMaterial3: true, fontFamily: 'Georgia',
+  scaffoldBackgroundColor: const Color(0xFF1A1612),
+  colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFFFFB5A0), brightness: Brightness.dark));
+
+// ═══════════════════════════════════════════════════════════════════════════
+// IMAGE ARG — handles both File (mobile) and Uint8List (web)
+// ═══════════════════════════════════════════════════════════════════════════
+class ImageArg {
+  final File?      file;
+  final Uint8List? bytes;
+  final String?    webUrl; // object URL for web to avoid decode errors
+  const ImageArg({this.file, this.bytes, this.webUrl});
+  bool get hasImage => file != null || bytes != null || webUrl != null;
+}
+
+// FIX: on web use Image.network with object URL to avoid encoding errors
+Widget buildImage(ImageArg? a, {BoxFit fit = BoxFit.cover}) {
+  if (a == null || !a.hasImage) return const SizedBox.shrink();
+  if (a.webUrl != null) return Image.network(a.webUrl!, fit: fit);
+  if (a.bytes != null) return Image.memory(a.bytes!, fit: fit, errorBuilder: (_,__,___) =>
+    Container(color: Colors.grey.shade200, child: const Icon(Icons.broken_image, color: Colors.grey)));
+  return Image.file(a.file!, fit: fit);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PRESET AVATARS
+// ═══════════════════════════════════════════════════════════════════════════
+const kAvatars = ['🐶','🐱','🐰','🐻','🦊','🐼','🐨','🐯','🦁','🐸','🐧','🦋'];
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ORG PIN MODEL
+// ═══════════════════════════════════════════════════════════════════════════
+enum OrgType { shelter, vet, welfare, clinic, other }
+
+class OrgPin {
+  final String name; final OrgType type; final LatLng position;
+  final String? phone; final String? website; final double distanceKm;
+  const OrgPin({required this.name, required this.type, required this.position,
+    this.phone, this.website, required this.distanceKm});
+  String get typeLabel { switch(type) {
+    case OrgType.shelter: return 'Animal Shelter';
+    case OrgType.vet:     return 'Veterinary';
+    case OrgType.welfare: return 'Animal Welfare';
+    case OrgType.clinic:  return 'Vet Clinic';
+    case OrgType.other:   return 'Animal Org';
+  }}
+  String get emoji { switch(type) {
+    case OrgType.shelter: return '🏠';
+    case OrgType.vet:     return '🩺';
+    case OrgType.welfare: return '🐾';
+    case OrgType.clinic:  return '💊';
+    case OrgType.other:   return '🌿';
+  }}
+  Color pinColor(bool d) { switch(type) {
+    case OrgType.shelter: return AC.sage(d);
+    case OrgType.vet:     return AC.sky(d);
+    case OrgType.welfare: return AC.lavender(d);
+    case OrgType.clinic:  return d ? const Color(0xFF6A4A2A) : const Color(0xFFFFE8D6);
+    case OrgType.other:   return d ? const Color(0xFF3A5A3A) : const Color(0xFFD6EAD8);
+  }}
+  String get distanceLabel => distanceKm < 1
+    ? '${(distanceKm*1000).toInt()} m' : '${distanceKm.toStringAsFixed(1)} km';
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// USER MODEL
+// ═══════════════════════════════════════════════════════════════════════════
+class AppUser {
+  String username, email; String? bio;
+  int reportsCount, adoptionsCount, coins, streak;
+  Map<String,int> coinLog; // key: YYYY-MM-DD, value: coins earned
+  String? avatarEmoji; Uint8List? avatarBytes;
+
+  AppUser({required this.username, required this.email, this.bio,
+    this.reportsCount=0, this.adoptionsCount=0, this.coins=0, this.streak=0,
+    Map<String,int>? coinLog, this.avatarEmoji, this.avatarBytes})
+    : coinLog = coinLog ?? {};
+
+  // Days logged this month
+  Set<int> get loggedDaysThisMonth {
+    final p = _mp();
+    return coinLog.keys.where((k)=>k.startsWith(p))
+      .map((k)=>int.parse(k.split('-')[2])).toSet();
+  }
+  // Total coins from login this month
+  int get monthlyLoginCoins {
+    final p = _mp();
+    return coinLog.entries.where((e)=>e.key.startsWith(p)).fold(0,(s,e)=>s+e.value);
+  }
+  static String _mp() { final n=DateTime.now();
+    return '${n.year}-${n.month.toString().padLeft(2,'0')}'; }
+  static String todayKey() { final n=DateTime.now();
+    return '${n.year}-${n.month.toString().padLeft(2,'0')}-${n.day.toString().padLeft(2,'0')}'; }
+  static String yesterdayKey() {
+    final y=DateTime.now().subtract(const Duration(days:1));
+    return '${y.year}-${y.month.toString().padLeft(2,'0')}-${y.day.toString().padLeft(2,'0')}'; }
+}
+
+AppUser? currentUser;
+bool appDarkMode = false;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// STORE
+// ═══════════════════════════════════════════════════════════════════════════
+class AppStore {
+  static const _U='u_n',_E='u_e',_B='u_b',_R='u_r',_A='u_a',_C='u_c',
+    _ST='u_st',_CL='u_cl',_AE='u_ae',_AB='u_ab',_DM='app_dm',_SH='s_h';
+
+  static Future<void> load() async {
+    final p = await SharedPreferences.getInstance();
+    appDarkMode = p.getBool(_DM) ?? false;
+    themeNotifier.value = appDarkMode;
+    final un = p.getString(_U);
+    if (un != null) {
+      Uint8List? av;
+      final b64 = p.getString(_AB);
+      if (b64 != null) try { av=base64Decode(b64); } catch(_){}
+      Map<String,int> cl = {};
+      final lj = p.getString(_CL);
+      if (lj != null) try {
+        final m = jsonDecode(lj) as Map;
+        cl = m.map((k,v)=>MapEntry(k.toString(),(v as num).toInt()));
+      } catch(_){}
+      currentUser = AppUser(
+        username:un, email:p.getString(_E)??'', bio:p.getString(_B),
+        reportsCount:p.getInt(_R)??0, adoptionsCount:p.getInt(_A)??0,
+        coins:p.getInt(_C)??0, streak:p.getInt(_ST)??0,
+        coinLog:cl, avatarEmoji:p.getString(_AE), avatarBytes:av);
+    }
+  }
+
+  static Future<void> save() async {
+    if (currentUser==null) return;
+    final p = await SharedPreferences.getInstance();
+    await p.setString(_U, currentUser!.username);
+    await p.setString(_E, currentUser!.email);
+    if (currentUser!.bio!=null) await p.setString(_B,currentUser!.bio!); else await p.remove(_B);
+    await p.setInt(_R, currentUser!.reportsCount);
+    await p.setInt(_A, currentUser!.adoptionsCount);
+    await p.setInt(_C, currentUser!.coins);
+    await p.setInt(_ST, currentUser!.streak);
+    await p.setString(_CL, jsonEncode(currentUser!.coinLog));
+    if (currentUser!.avatarEmoji!=null) await p.setString(_AE,currentUser!.avatarEmoji!); else await p.remove(_AE);
+    if (currentUser!.avatarBytes!=null) await p.setString(_AB,base64Encode(currentUser!.avatarBytes!)); else await p.remove(_AB);
+    await p.setBool(_DM, appDarkMode);
+  }
+
+  static Future<void> clear() async {
+    final p = await SharedPreferences.getInstance(); await p.clear();
+  }
+
+  /// Streak-based daily bonus:
+  /// Coins per day = min(streak, max daily so that ~100 total in 30 days)
+  /// Day 1→1, Day 2→2 ... Day 7→7, cap at 7 thereafter (7*14+sum1..6 = 98+21 = ~100 in 30 days)
+  /// Returns (bonusGranted, coinsEarned, newStreak)
+  static Future<(bool, int, int)> checkDailyBonus() async {
+    if (currentUser==null) return (false,0,0);
+    final today = AppUser.todayKey();
+    final yesterday = AppUser.yesterdayKey();
+    if (currentUser!.coinLog.containsKey(today)) return (false,0,currentUser!.streak);
+
+    // Streak logic
+    final hadYesterday = currentUser!.coinLog.containsKey(yesterday);
+    final newStreak = hadYesterday ? currentUser!.streak + 1 : 1;
+    // Coins = min(newStreak, 7)
+    final coinsToday = math.min(newStreak, 7);
+
+    currentUser!.streak = newStreak;
+    currentUser!.coinLog[today] = coinsToday;
+    currentUser!.coins += coinsToday;
+    await save();
+    return (true, coinsToday, newStreak);
+  }
+
+  static Future<void> resetStreak() async {
+    if (currentUser==null) return;
+    currentUser!.streak = 0;
+    await save();
+  }
+
+  static Future<List<String>> getSearchHistory() async {
+    final p = await SharedPreferences.getInstance();
+    return p.getStringList(_SH) ?? [];
+  }
+
+  static Future<void> addSearch(String q) async {
+    if (q.trim().isEmpty) return;
+    final p = await SharedPreferences.getInstance();
+    final h = p.getStringList(_SH) ?? [];
+    h.remove(q); h.insert(0,q);
+    if (h.length>20) h.removeLast();
+    await p.setStringList(_SH,h);
+  }
+
+  static Future<void> clearSearchHistory() async {
+    final p = await SharedPreferences.getInstance(); await p.remove(_SH);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// OVERPASS API — with CORS proxy for web
+// Uses overpass-api.de directly on mobile, proxy on web
+// ═══════════════════════════════════════════════════════════════════════════
+Future<List<OrgPin>> fetchOverpassOrgs(LatLng center, double radiusKm) async {
+  final r = (radiusKm * 1000).toInt();
+  final lat = center.latitude, lng = center.longitude;
+
+  // Broad query covering all animal-related establishments
+  final query = '''
+[out:json][timeout:30];
+(
+  node["amenity"="veterinary"](around:$r,$lat,$lng);
+  way["amenity"="veterinary"](around:$r,$lat,$lng);
+  node["amenity"="animal_shelter"](around:$r,$lat,$lng);
+  way["amenity"="animal_shelter"](around:$r,$lat,$lng);
+  node["amenity"="animal_boarding"](around:$r,$lat,$lng);
+  node["shop"="pet"](around:$r,$lat,$lng);
+  way["shop"="pet"](around:$r,$lat,$lng);
+  node["amenity"="animal_clinic"](around:$r,$lat,$lng);
+  node["healthcare"="veterinary"](around:$r,$lat,$lng);
+  node["animal"="shelter"](around:$r,$lat,$lng);
+  node["animal"="clinic"](around:$r,$lat,$lng);
+  node["name"~"[Vv]et",i](around:$r,$lat,$lng);
+  node["name"~"[Aa]nimal",i](around:$r,$lat,$lng);
+  node["name"~"[Pp]aws",i](around:$r,$lat,$lng);
+  node["name"~"[Ss]helter",i](around:$r,$lat,$lng);
+  node["name"~"[Cc]linic",i](around:$r,$lat,$lng);
+);
+out center;
+''';
+
+  // On web use allorigins CORS proxy; on mobile call directly
+  final Uri uri;
+  if (kIsWeb) {
+    final encoded = Uri.encodeComponent(
+      'https://overpass-api.de/api/interpreter?data=${Uri.encodeComponent(query)}');
+    uri = Uri.parse('https://api.allorigins.win/get?url=$encoded');
+  } else {
+    uri = Uri.parse('https://overpass-api.de/api/interpreter');
+  }
+
+  try {
+    http.Response resp;
+    if (kIsWeb) {
+      resp = await http.get(uri,
+        headers: {'User-Agent':'AL-AGAP/1.0 alagap.philippines@gmail.com'})
+        .timeout(const Duration(seconds: 30));
+    } else {
+      resp = await http.post(uri, body: query,
+        headers: {'Content-Type':'application/x-www-form-urlencoded'})
+        .timeout(const Duration(seconds: 30));
+    }
+    if (resp.statusCode != 200) return _fallbackOrgs(center);
+
+    Map<String,dynamic> data;
+    if (kIsWeb) {
+      // allorigins wraps response in {"contents":"...","status":{}}
+      final wrapper = jsonDecode(resp.body) as Map<String,dynamic>;
+      final contents = wrapper['contents'] as String? ?? '{}';
+      data = jsonDecode(contents) as Map<String,dynamic>;
+    } else {
+      data = jsonDecode(resp.body) as Map<String,dynamic>;
+    }
+
+    final elements = (data['elements'] as List?) ?? [];
+    if (elements.isEmpty) return _fallbackOrgs(center);
+
+    final dist = const Distance();
+    final List<OrgPin> pins = [];
+    final Set<String> seen = {};
+
+    for (final el in elements) {
+      final tags = (el['tags'] as Map<String,dynamic>?) ?? {};
+      final name = (tags['name'] ?? tags['operator'] ?? 'Unnamed Organization').toString();
+      if (seen.contains(name)) continue;
+      seen.add(name);
+
+      double? elat, elng;
+      if (el['type'] == 'node') {
+        elat = (el['lat'] as num?)?.toDouble();
+        elng = (el['lon'] as num?)?.toDouble();
+      } else if (el['center'] != null) {
+        elat = (el['center']['lat'] as num?)?.toDouble();
+        elng = (el['center']['lon'] as num?)?.toDouble();
+      }
+      if (elat == null || elng == null) continue;
+
+      final pos = LatLng(elat, elng);
+      final km  = dist.as(LengthUnit.Kilometer, center, pos);
+
+      final amenity = (tags['amenity'] ?? '').toString().toLowerCase();
+      final shop    = (tags['shop']    ?? '').toString().toLowerCase();
+      final health  = (tags['healthcare'] ?? '').toString().toLowerCase();
+      final nameLow = name.toLowerCase();
+
+      OrgType t = OrgType.other;
+      if (amenity=='veterinary' || health=='veterinary') t = OrgType.vet;
+      else if (amenity=='animal_shelter' || amenity=='animal') t = OrgType.shelter;
+      else if (shop=='pet') t = OrgType.clinic;
+      else if (amenity=='animal_boarding') t = OrgType.welfare;
+      else if (nameLow.contains('vet') || nameLow.contains('clinic')) t = OrgType.vet;
+      else if (nameLow.contains('shelter') || nameLow.contains('rescue')) t = OrgType.shelter;
+      else if (nameLow.contains('paws') || nameLow.contains('animal')) t = OrgType.welfare;
+
+      pins.add(OrgPin(name:name, type:t, position:pos,
+        phone: tags['phone']?.toString(),
+        website: tags['website']?.toString(),
+        distanceKm: km));
+    }
+
+    pins.sort((a,b) => a.distanceKm.compareTo(b.distanceKm));
+    // If overpass returned results, return them; else fallback
+    return pins.isNotEmpty ? pins : _fallbackOrgs(center);
+  } catch (e) {
+    return _fallbackOrgs(center);
+  }
+}
+
+// Fallback mock pins when Overpass is unavailable
+List<OrgPin> _fallbackOrgs(LatLng center) {
+  final lat = center.latitude, lng = center.longitude;
+  return [
+    OrgPin(name:'PAWS Animal Welfare',    type:OrgType.welfare, distanceKm:0.8,
+      position:LatLng(lat+0.007,lng+0.005), phone:'+6391712345'),
+    OrgPin(name:'City Veterinary Office', type:OrgType.vet,     distanceKm:1.2,
+      position:LatLng(lat-0.009,lng+0.008), phone:'+6391798765'),
+    OrgPin(name:'CARA Philippines',       type:OrgType.shelter, distanceKm:2.1,
+      position:LatLng(lat+0.015,lng-0.010), phone:'+6391812345'),
+    OrgPin(name:'Happy Paws Clinic',      type:OrgType.clinic,  distanceKm:2.4,
+      position:LatLng(lat-0.016,lng-0.012), phone:'+6391912345'),
+    OrgPin(name:'ASAP Animal Sanctuary',  type:OrgType.shelter, distanceKm:3.0,
+      position:LatLng(lat+0.022,lng+0.018), phone:'+6392012345'),
+  ];
+}
+
+// Nominatim search — simple query, no OR operator
+Future<List<OrgPin>> searchNominatim(String q, LatLng? center) async {
+  // Search multiple terms separately and merge
+  final terms = ['veterinary $q','animal shelter $q','pet clinic $q','animal welfare $q'];
+  final dist  = const Distance();
+  final List<OrgPin> results = [];
+  final Set<String> seen = {};
+
+  for (final term in terms) {
+    final encoded = Uri.encodeComponent(term);
+    final url = 'https://nominatim.openstreetmap.org/search'
+      '?q=$encoded&format=json&limit=5&addressdetails=0';
+    try {
+      final resp = await http.get(Uri.parse(url),
+        headers: {'User-Agent':'AL-AGAP/1.0 alagap.philippines@gmail.com',
+                  'Accept-Language':'en'})
+        .timeout(const Duration(seconds: 10));
+      if (resp.statusCode != 200) continue;
+      final data = jsonDecode(resp.body) as List;
+      for (final el in data) {
+        final name = (el['display_name'] ?? '').toString().split(',').first.trim();
+        if (seen.contains(name) || name.isEmpty) continue;
+        seen.add(name);
+        final lat = double.tryParse(el['lat']?.toString() ?? '') ?? 0;
+        final lng = double.tryParse(el['lon']?.toString() ?? '') ?? 0;
+        if (lat == 0 && lng == 0) continue;
+        final pos = LatLng(lat, lng);
+        final km  = center != null ? dist.as(LengthUnit.Kilometer, center, pos) : 0.0;
+        results.add(OrgPin(name:name, type:OrgType.other, position:pos, distanceKm:km));
+      }
+    } catch(_) { continue; }
+  }
+  results.sort((a,b)=>a.distanceKm.compareTo(b.distanceKm));
+  return results;
+}
+
+// Nominatim autocomplete suggestions
+Future<List<String>> nominatimSuggest(String q) async {
+  if (q.trim().length < 2) return [];
+  final encoded = Uri.encodeComponent('$q animal');
+  final url = 'https://nominatim.openstreetmap.org/search'
+    '?q=$encoded&format=json&limit=5&addressdetails=0';
+  try {
+    final resp = await http.get(Uri.parse(url),
+      headers: {'User-Agent':'AL-AGAP/1.0 alagap.philippines@gmail.com'})
+      .timeout(const Duration(seconds: 8));
+    if (resp.statusCode != 200) return [];
+    final data = jsonDecode(resp.body) as List;
+    return data.map((e)=>(e['display_name']??'').toString().split(',').first.trim())
+      .where((s)=>s.isNotEmpty).take(5).toList();
+  } catch(_) { return []; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MAIN
+// ═══════════════════════════════════════════════════════════════════════════
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  if (!kIsWeb) SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+    statusBarColor:Colors.transparent, statusBarIconBrightness:Brightness.dark));
+  await AppStore.load();
+  runApp(const AlAgapApp());
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ROOT — ValueListenableBuilder ensures dark mode toggle rebuilds everything
+// ═══════════════════════════════════════════════════════════════════════════
+class AlAgapApp extends StatelessWidget {
+  const AlAgapApp({super.key});
+  @override Widget build(BuildContext context) {
+    return ValueListenableBuilder<bool>(
+      valueListenable: themeNotifier,
+      builder: (_, dark, __) => MaterialApp(
+        title: 'AL-AGAP', debugShowCheckedModeBanner: false,
+        theme: _light(), darkTheme: _dark(),
+        themeMode: dark ? ThemeMode.dark : ThemeMode.light,
+        initialRoute: '/',
+        routes: {
+          '/':         (_) => const SplashScreen(),
+          '/loading':  (_) => const LoadingScreen(),
+          '/auth':     (_) => const AuthScreen(),
+          '/home':     (_) => const HomeScreen(),
+          '/adopt':    (_) => const AdoptScreen(),
+          '/report':   (_) => const ReportScreen(),
+          '/profile':  (_) => const ProfileScreen(),
+          '/settings': (_) => const SettingsScreen(),
+        },
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DARK MODE HELPER — reads from Theme, not themeNotifier, so it always
+// returns correct value even after hot-reload or navigation
+// ═══════════════════════════════════════════════════════════════════════════
+bool isDark(BuildContext ctx) => Theme.of(ctx).brightness == Brightness.dark;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SHARED BUTTON
+// ═══════════════════════════════════════════════════════════════════════════
+class PeachButton extends StatefulWidget {
+  final String label; final VoidCallback onTap; final bool loading;
+  const PeachButton({super.key, required this.label, required this.onTap, this.loading=false});
+  @override State<PeachButton> createState() => _PeachButtonState();
+}
+class _PeachButtonState extends State<PeachButton> with SingleTickerProviderStateMixin {
+  late AnimationController _c; late Animation<double> _sc;
+  @override void initState() { super.initState();
+    _c=AnimationController(vsync:this,duration:const Duration(milliseconds:120));
+    _sc=Tween(begin:1.0,end:.95).animate(_c); }
+  @override void dispose() { _c.dispose(); super.dispose(); }
+  @override Widget build(BuildContext ctx) {
+    final d=isDark(ctx);
+    return GestureDetector(
+      onTapDown:(_)=>_c.forward(), onTapUp:(_){_c.reverse();if(!widget.loading)widget.onTap();}, onTapCancel:()=>_c.reverse(),
+      child:ScaleTransition(scale:_sc,child:Container(
+        width:double.infinity,height:54,
+        decoration:BoxDecoration(
+          gradient:LinearGradient(colors:[AC.peach(d), d?const Color(0xFFE8644A):const Color(0xFFFF8F7A)]),
+          borderRadius:BorderRadius.circular(16),
+          boxShadow:[BoxShadow(color:AC.peach(d).withOpacity(0.4),blurRadius:14,offset:const Offset(0,6))]),
+        child:Center(child:widget.loading
+          ? const SizedBox(width:24,height:24,child:CircularProgressIndicator(color:Colors.white,strokeWidth:2.5))
+          : Text(widget.label,style:const TextStyle(color:Colors.white,fontSize:17,fontWeight:FontWeight.bold,letterSpacing:1))))));
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// USER AVATAR
+// ═══════════════════════════════════════════════════════════════════════════
+class UserAvatar extends StatelessWidget {
+  final AppUser? user; final double size, fontSize;
+  const UserAvatar({super.key, required this.user, this.size=44, this.fontSize=18});
+  @override Widget build(BuildContext ctx) {
+    final d = isDark(ctx);
+    Widget child;
+    if (user?.avatarBytes != null) {
+      return Container(width:size, height:size,
+        decoration:BoxDecoration(shape:BoxShape.circle,
+          boxShadow:[BoxShadow(color:AC.peach(d).withOpacity(0.3),blurRadius:8)]),
+        child:ClipOval(child:Image.memory(user!.avatarBytes!, fit:BoxFit.cover,
+          errorBuilder:(_,__,___)=>_shell(d,Text(user!.username[0].toUpperCase(),
+            style:TextStyle(color:Colors.white,fontSize:fontSize,fontWeight:FontWeight.bold))))));
+    }
+    if (user?.avatarEmoji != null) child = Text(user!.avatarEmoji!, style:TextStyle(fontSize:fontSize+4));
+    else child = Text(user!=null?user!.username[0].toUpperCase():'👤',
+      style:TextStyle(color:Colors.white,fontSize:fontSize,fontWeight:FontWeight.bold));
+    return _shell(d, child);
+  }
+  Widget _shell(bool d, Widget ch) => Container(width:size,height:size,
+    decoration:BoxDecoration(gradient:LinearGradient(colors:[AC.peach(d),AC.sage(d)]),shape:BoxShape.circle,
+      boxShadow:[BoxShadow(color:AC.peach(d).withOpacity(0.3),blurRadius:8)]),
+    child:Center(child:ch));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SPLASH
+// ═══════════════════════════════════════════════════════════════════════════
+class SplashScreen extends StatefulWidget {
+  const SplashScreen({super.key});
+  @override State<SplashScreen> createState() => _SplashScreenState();
+}
+class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMixin {
+  late AnimationController _lC,_tC,_bC,_fC;
+  late Animation<double> _lS,_lF,_tF,_bF,_fY;
+  late Animation<Offset> _tSl,_bSl;
+  @override void initState() { super.initState();
+    _lC=AnimationController(vsync:this,duration:const Duration(milliseconds:900));
+    _tC=AnimationController(vsync:this,duration:const Duration(milliseconds:700));
+    _bC=AnimationController(vsync:this,duration:const Duration(milliseconds:600));
+    _fC=AnimationController(vsync:this,duration:const Duration(seconds:3))..repeat(reverse:true);
+    _lS=Tween(begin:.4,end:1.0).animate(CurvedAnimation(parent:_lC,curve:Curves.elasticOut));
+    _lF=Tween(begin:.0,end:1.0).animate(CurvedAnimation(parent:_lC,curve:const Interval(0,.5)));
+    _tF=Tween(begin:.0,end:1.0).animate(CurvedAnimation(parent:_tC,curve:Curves.easeIn));
+    _tSl=Tween(begin:const Offset(0,.3),end:Offset.zero).animate(CurvedAnimation(parent:_tC,curve:Curves.easeOut));
+    _bF=Tween(begin:.0,end:1.0).animate(CurvedAnimation(parent:_bC,curve:Curves.easeIn));
+    _bSl=Tween(begin:const Offset(0,.4),end:Offset.zero).animate(CurvedAnimation(parent:_bC,curve:Curves.easeOut));
+    _fY=Tween(begin:-6.0,end:6.0).animate(CurvedAnimation(parent:_fC,curve:Curves.easeInOut));
+    _run(); }
+  Future<void> _run() async {
+    await Future.delayed(const Duration(milliseconds:300)); _lC.forward();
+    await Future.delayed(const Duration(milliseconds:600)); _tC.forward();
+    await Future.delayed(const Duration(milliseconds:500)); _bC.forward(); }
+  @override void dispose() { _lC.dispose();_tC.dispose();_bC.dispose();_fC.dispose(); super.dispose(); }
+  @override Widget build(BuildContext ctx) {
+    final d=isDark(ctx); final sb=AC.softBrown(d); final lt=AC.lightText(d);
+    return Scaffold(body:Container(decoration:gradBg(d),child:SafeArea(child:Column(mainAxisAlignment:MainAxisAlignment.center,children:[
+      const Spacer(flex:2),
+      AnimatedBuilder(animation:_fY,builder:(_,ch)=>Transform.translate(offset:Offset(0,_fY.value),child:ch),
+        child:FadeTransition(opacity:_lF,child:ScaleTransition(scale:_lS,
+          child:Container(width:130,height:130,decoration:BoxDecoration(color:AC.card(d),shape:BoxShape.circle,
+            boxShadow:[BoxShadow(color:AC.peach(d).withOpacity(0.4),blurRadius:30,spreadRadius:5)]),
+            child:const Center(child:Text('🐾',style:TextStyle(fontSize:60))))))),
+      const SizedBox(height:32),
+      FadeTransition(opacity:_tF,child:SlideTransition(position:_tSl,child:Column(children:[
+        Text('AL-AGAP',style:TextStyle(fontSize:42,fontWeight:FontWeight.bold,color:sb,letterSpacing:6)),
+        const SizedBox(height:10),
+        Text('Every animal deserves love.',style:TextStyle(fontSize:15,color:lt,letterSpacing:1.5,fontStyle:FontStyle.italic)),
+        const SizedBox(height:6),
+        Container(height:2,width:60,decoration:BoxDecoration(color:AC.peach(d),borderRadius:BorderRadius.circular(2))),
+      ]))),
+      const Spacer(flex:2),
+      FadeTransition(opacity:_bF,child:SlideTransition(position:_bSl,
+        child:Padding(padding:const EdgeInsets.symmetric(horizontal:48),
+          child:_EnterBtn(onTap:()=>Navigator.pushReplacementNamed(ctx,'/loading'))))),
+      const SizedBox(height:60),
+    ]))));
+  }
+}
+
+class _EnterBtn extends StatefulWidget {
+  final VoidCallback onTap; const _EnterBtn({required this.onTap});
+  @override State<_EnterBtn> createState() => _EnterBtnState();
+}
+class _EnterBtnState extends State<_EnterBtn> with SingleTickerProviderStateMixin {
+  late AnimationController _c; late Animation<double> _sc;
+  @override void initState() { super.initState();
+    _c=AnimationController(vsync:this,duration:const Duration(milliseconds:120));
+    _sc=Tween(begin:1.0,end:.94).animate(_c); }
+  @override void dispose() { _c.dispose(); super.dispose(); }
+  @override Widget build(BuildContext ctx) {
+    final d=isDark(ctx);
+    return GestureDetector(onTapDown:(_)=>_c.forward(),onTapUp:(_){_c.reverse();widget.onTap();},onTapCancel:()=>_c.reverse(),
+      child:ScaleTransition(scale:_sc,child:Container(height:58,decoration:BoxDecoration(
+        gradient:LinearGradient(colors:[AC.peach(d),d?const Color(0xFFE8644A):const Color(0xFFFF8F7A)]),
+        borderRadius:BorderRadius.circular(30),
+        boxShadow:[BoxShadow(color:AC.peach(d).withOpacity(0.5),blurRadius:20,offset:const Offset(0,8))]),
+        child:Row(mainAxisAlignment:MainAxisAlignment.center,children:[
+          const Text('ENTER',style:TextStyle(color:Colors.white,fontSize:18,fontWeight:FontWeight.bold,letterSpacing:4)),
+          const SizedBox(width:10),
+          Container(width:28,height:28,decoration:BoxDecoration(color:Colors.white.withOpacity(0.25),shape:BoxShape.circle),
+            child:const Icon(Icons.arrow_forward_rounded,color:Colors.white,size:16))]))));
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LOADING
+// ═══════════════════════════════════════════════════════════════════════════
+class LoadingScreen extends StatefulWidget {
+  const LoadingScreen({super.key});
+  @override State<LoadingScreen> createState() => _LoadingScreenState();
+}
+class _LoadingScreenState extends State<LoadingScreen> with TickerProviderStateMixin {
+  late AnimationController _pC,_puC; late Animation<double> _pA,_puA;
+  int _mi=0;
+  final _msgs=['Waking up the animals... 🐾','Sniffing out nearby shelters... 🐶','Preparing your rescue kit... 🏥','Almost ready! 💛'];
+  @override void initState() { super.initState();
+    _pC=AnimationController(vsync:this,duration:const Duration(milliseconds:3200));
+    _puC=AnimationController(vsync:this,duration:const Duration(milliseconds:900))..repeat(reverse:true);
+    _pA=CurvedAnimation(parent:_pC,curve:Curves.easeInOut);
+    _puA=Tween(begin:.95,end:1.05).animate(_puC);
+    _pC.forward();
+    Future.doWhile(()async{ await Future.delayed(const Duration(milliseconds:800));
+      if(!mounted)return false; setState(()=>_mi=(_mi+1)%_msgs.length); return _mi!=_msgs.length-1; });
+    _pC.addStatusListener((s){ if(s==AnimationStatus.completed&&mounted)
+      Navigator.pushReplacementNamed(context,currentUser!=null?'/home':'/auth'); }); }
+  @override void dispose() { _pC.dispose();_puC.dispose(); super.dispose(); }
+  @override Widget build(BuildContext ctx) {
+    final d=isDark(ctx);
+    return Scaffold(body:Container(decoration:gradBg(d),child:SafeArea(child:Center(child:Padding(
+      padding:const EdgeInsets.symmetric(horizontal:48),
+      child:Column(mainAxisAlignment:MainAxisAlignment.center,children:[
+        ScaleTransition(scale:_puA,child:Container(width:110,height:110,decoration:BoxDecoration(color:AC.card(d),shape:BoxShape.circle,
+          boxShadow:[BoxShadow(color:AC.peach(d).withOpacity(0.4),blurRadius:28,spreadRadius:4)]),
+          child:const Center(child:Text('🐾',style:TextStyle(fontSize:52))))),
+        const SizedBox(height:40),
+        AnimatedSwitcher(duration:const Duration(milliseconds:400),child:Text(_msgs[_mi],key:ValueKey(_mi),
+          textAlign:TextAlign.center,style:TextStyle(fontSize:16,color:AC.mutedText(d),fontStyle:FontStyle.italic,height:1.5))),
+        const SizedBox(height:36),
+        Container(height:8,width:double.infinity,decoration:BoxDecoration(color:AC.blush(d).withOpacity(0.4),borderRadius:BorderRadius.circular(8)),
+          child:AnimatedBuilder(animation:_pA,builder:(_,__)=>FractionallySizedBox(alignment:Alignment.centerLeft,widthFactor:_pA.value,
+            child:Container(decoration:BoxDecoration(gradient:LinearGradient(colors:[AC.peach(d),AC.sage(d)]),borderRadius:BorderRadius.circular(8)))))),
+        const SizedBox(height:16),
+        AnimatedBuilder(animation:_pA,builder:(_,__)=>Text('${(_pA.value*100).toInt()}%',
+          style:TextStyle(fontSize:13,color:AC.lightText(d),fontWeight:FontWeight.w600))),
+      ]))))));
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AUTH
+// ═══════════════════════════════════════════════════════════════════════════
+class AuthScreen extends StatefulWidget {
+  const AuthScreen({super.key});
+  @override State<AuthScreen> createState() => _AuthScreenState();
+}
+class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
+  bool _login=true,_obs=true,_loading=false;
+  final _fk=GlobalKey<FormState>();
+  final _un=TextEditingController(),_em=TextEditingController(),_pw=TextEditingController();
+  late AnimationController _fC; late Animation<double> _fA;
+  @override void initState() { super.initState();
+    _fC=AnimationController(vsync:this,duration:const Duration(milliseconds:500));
+    _fA=CurvedAnimation(parent:_fC,curve:Curves.easeIn); _fC.forward(); }
+  @override void dispose() { _fC.dispose();_un.dispose();_em.dispose();_pw.dispose(); super.dispose(); }
+  void _toggle() { _fC.reset(); setState(()=>_login=!_login); _fC.forward(); }
+  Future<void> _submit() async {
+    if(!_fk.currentState!.validate()) return;
+    setState(()=>_loading=true);
+    await Future.delayed(const Duration(milliseconds:1200));
+    currentUser=AppUser(username:_login?_em.text.split('@').first:_un.text.trim(),email:_em.text.trim());
+    await AppStore.save();
+    final (got,coins,streak)=await AppStore.checkDailyBonus();
+    if(mounted){ Navigator.pushReplacementNamed(context,'/home');
+      if(got) Future.delayed(const Duration(milliseconds:600),(){
+        if(mounted) showDialog(context:context,builder:(_)=>BonusDialog(coins:coins,streak:streak,total:currentUser?.coins??coins)); }); }
+  }
+  @override Widget build(BuildContext ctx) {
+    final d=isDark(ctx); final sb=AC.softBrown(d); final lt=AC.lightText(d); final mt=AC.mutedText(d);
+    return Scaffold(body:Container(decoration:gradBg(d),child:SafeArea(child:FadeTransition(opacity:_fA,
+      child:SingleChildScrollView(padding:const EdgeInsets.symmetric(horizontal:28,vertical:32),child:Column(children:[
+        Container(width:80,height:80,decoration:BoxDecoration(color:AC.card(d),shape:BoxShape.circle,
+          boxShadow:[BoxShadow(color:AC.peach(d).withOpacity(0.35),blurRadius:20,spreadRadius:3)]),
+          child:const Center(child:Text('🐾',style:TextStyle(fontSize:38)))),
+        const SizedBox(height:20),
+        Text('AL-AGAP',style:TextStyle(fontSize:28,fontWeight:FontWeight.bold,color:sb,letterSpacing:4)),
+        const SizedBox(height:6),
+        Text(_login?'Welcome back!':'Create your account',style:TextStyle(fontSize:14,color:lt,fontStyle:FontStyle.italic)),
+        const SizedBox(height:36),
+        Container(padding:const EdgeInsets.all(28),decoration:BoxDecoration(color:AC.card(d).withOpacity(0.9),
+          borderRadius:BorderRadius.circular(28),boxShadow:[BoxShadow(color:AC.blush(d).withOpacity(0.3),blurRadius:24,offset:const Offset(0,8))]),
+          child:Form(key:_fk,child:Column(children:[
+            if(!_login)...[_field(_un,'Username',Icons.person_outline_rounded,d,v:(v)=>(v==null||v.trim().isEmpty)?'Enter a username':null),const SizedBox(height:16)],
+            _field(_em,'Email',Icons.email_outlined,d,kb:TextInputType.emailAddress,v:(v){if(v==null||v.isEmpty)return'Enter email';if(!v.contains('@'))return'Invalid email';return null;}),
+            const SizedBox(height:16),
+            _field(_pw,'Password',Icons.lock_outline_rounded,d,obs:_obs,
+              suf:IconButton(icon:Icon(_obs?Icons.visibility_off_outlined:Icons.visibility_outlined,color:lt,size:20),onPressed:()=>setState(()=>_obs=!_obs)),
+              v:(v){if(v==null||v.isEmpty)return'Enter password';if(v.length<6)return'Min 6 chars';return null;}),
+            const SizedBox(height:28),
+            PeachButton(label:_login?'Log In':'Create Account',loading:_loading,onTap:_submit),
+          ]))),
+        const SizedBox(height:24),
+        Row(mainAxisAlignment:MainAxisAlignment.center,children:[
+          Text(_login?"Don't have an account? ":"Already have an account? ",style:TextStyle(fontSize:13,color:mt)),
+          GestureDetector(onTap:_toggle,child:Text(_login?'Sign Up':'Log In',style:TextStyle(fontSize:13,color:AC.peach(d),fontWeight:FontWeight.bold))),
+        ]),
+        const SizedBox(height:16),
+        GestureDetector(onTap:() async {
+          currentUser=AppUser(username:'Guest',email:'guest@alagap.app');
+          await AppStore.save(); if(mounted) Navigator.pushReplacementNamed(context,'/home');
+        },child:Text('Skip for now →',style:TextStyle(fontSize:12,color:lt,decoration:TextDecoration.underline))),
+      ]))))));
+  }
+  Widget _field(TextEditingController c,String lbl,IconData icon,bool d,
+    {TextInputType? kb,bool obs=false,Widget? suf,String? Function(String?)? v}) {
+    final lt=AC.lightText(d); final mt=AC.mutedText(d);
+    return TextFormField(controller:c,obscureText:obs,keyboardType:kb,validator:v,
+      style:TextStyle(color:mt,fontSize:15),
+      decoration:InputDecoration(labelText:lbl,labelStyle:TextStyle(color:lt,fontSize:14),
+        prefixIcon:Icon(icon,color:lt,size:20),suffixIcon:suf,
+        filled:true,fillColor:AC.cream(d),
+        border:OutlineInputBorder(borderRadius:BorderRadius.circular(14),borderSide:BorderSide.none),
+        enabledBorder:OutlineInputBorder(borderRadius:BorderRadius.circular(14),borderSide:BorderSide(color:AC.blush(d),width:1.5)),
+        focusedBorder:OutlineInputBorder(borderRadius:BorderRadius.circular(14),borderSide:BorderSide(color:AC.peach(d),width:2)),
+        errorBorder:OutlineInputBorder(borderRadius:BorderRadius.circular(14),borderSide:const BorderSide(color:Colors.redAccent,width:1.5)),
+        focusedErrorBorder:OutlineInputBorder(borderRadius:BorderRadius.circular(14),borderSide:const BorderSide(color:Colors.redAccent,width:2)),
+        contentPadding:const EdgeInsets.symmetric(horizontal:16,vertical:14)));
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BONUS DIALOG — shows streak + coins earned
+// ═══════════════════════════════════════════════════════════════════════════
+class BonusDialog extends StatefulWidget {
+  final int coins, streak, total;
+  const BonusDialog({super.key, required this.coins, required this.streak, required this.total});
+  @override State<BonusDialog> createState() => _BonusDialogState();
+}
+class _BonusDialogState extends State<BonusDialog> with SingleTickerProviderStateMixin {
+  late AnimationController _c; late Animation<double> _sc,_fa;
+  @override void initState() { super.initState();
+    _c=AnimationController(vsync:this,duration:const Duration(milliseconds:600));
+    _sc=Tween(begin:.5,end:1.0).animate(CurvedAnimation(parent:_c,curve:Curves.elasticOut));
+    _fa=Tween(begin:.0,end:1.0).animate(_c); _c.forward(); }
+  @override void dispose() { _c.dispose(); super.dispose(); }
+  @override Widget build(BuildContext ctx) {
+    final d=isDark(ctx); final sb=AC.softBrown(d); final lt=AC.lightText(d);
+    return Dialog(backgroundColor:Colors.transparent,child:FadeTransition(opacity:_fa,child:ScaleTransition(scale:_sc,
+      child:Container(padding:const EdgeInsets.all(28),decoration:BoxDecoration(
+        gradient:LinearGradient(colors:[AC.cream(d),AC.blush(d).withOpacity(0.5)]),
+        borderRadius:BorderRadius.circular(28),
+        boxShadow:[BoxShadow(color:AC.peach(d).withOpacity(0.3),blurRadius:24,spreadRadius:4)]),
+        child:Column(mainAxisSize:MainAxisSize.min,children:[
+          const Text('🎉',style:TextStyle(fontSize:48)),
+          const SizedBox(height:10),
+          Text('Daily Bonus!',style:TextStyle(fontSize:22,fontWeight:FontWeight.bold,color:sb)),
+          const SizedBox(height:6),
+          // Streak badge
+          Container(padding:const EdgeInsets.symmetric(horizontal:14,vertical:6),
+            decoration:BoxDecoration(color:AC.streak.withOpacity(0.15),borderRadius:BorderRadius.circular(20),
+              border:Border.all(color:AC.streak.withOpacity(0.4),width:1.5)),
+            child:Row(mainAxisSize:MainAxisSize.min,children:[
+              const Text('🔥',style:TextStyle(fontSize:18)),const SizedBox(width:6),
+              Text('${widget.streak} Day Streak!',style:TextStyle(fontSize:15,fontWeight:FontWeight.bold,color:AC.streak)),
+            ])),
+          const SizedBox(height:14),
+          Container(padding:const EdgeInsets.symmetric(horizontal:20,vertical:12),
+            decoration:BoxDecoration(color:AC.gold.withOpacity(0.15),borderRadius:BorderRadius.circular(18),
+              border:Border.all(color:AC.gold.withOpacity(0.4),width:2)),
+            child:Row(mainAxisSize:MainAxisSize.min,children:[
+              const Text('🪙',style:TextStyle(fontSize:26)),const SizedBox(width:10),
+              Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+                Text('+${widget.coins} Coin${widget.coins>1?'s':''}',style:TextStyle(fontSize:20,fontWeight:FontWeight.bold,color:sb)),
+                Text('Total: ${widget.total} coins',style:TextStyle(fontSize:11,color:lt)),
+              ]),
+            ])),
+          const SizedBox(height:8),
+          Text('Day ${widget.streak} → ${math.min(widget.streak+1,7)} coins tomorrow',
+            style:TextStyle(fontSize:11,color:lt,fontStyle:FontStyle.italic)),
+          const SizedBox(height:20),
+          PeachButton(label:'Awesome! 🐾',onTap:()=>Navigator.pop(ctx)),
+        ])))));
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HOME
+// ═══════════════════════════════════════════════════════════════════════════
+class HomeScreen extends StatefulWidget {
+  const HomeScreen({super.key});
+  @override State<HomeScreen> createState() => _HomeScreenState();
+}
+class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin {
+  File? _file; Uint8List? _bytes; String? _webUrl;
+  final _picker=ImagePicker();
+  late AnimationController _fC; late Animation<double> _fA;
+  bool get _has => _file!=null||_bytes!=null||_webUrl!=null;
+  ImageArg get _arg => ImageArg(file:_file,bytes:_bytes,webUrl:_webUrl);
+  @override void initState() { super.initState();
+    _fC=AnimationController(vsync:this,duration:const Duration(milliseconds:600));
+    _fA=CurvedAnimation(parent:_fC,curve:Curves.easeIn); _fC.forward();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final (got,coins,streak)=await AppStore.checkDailyBonus();
+      if(got&&mounted){ showDialog(context:context,builder:(_)=>BonusDialog(coins:coins,streak:streak,total:currentUser?.coins??coins)); setState((){}); } }); }
+  @override void dispose() { _fC.dispose(); super.dispose(); }
+
+  // FIX: use XFile.path for web (object URL) — avoids encoding errors
+  Future<void> _photo(ImageSource src) async {
+    final x=await _picker.pickImage(source:src,imageQuality:80,maxWidth:1024,maxHeight:1024);
+    if(x==null) return;
+    if(kIsWeb) {
+      // Use network image via object URL to avoid encoding failures
+      setState((){_webUrl=x.path;_bytes=null;_file=null;});
+    } else {
+      setState((){_file=File(x.path);_bytes=null;_webUrl=null;});
+    }
+  }
+  void _clear() => setState((){_file=null;_bytes=null;_webUrl=null;});
+
+  @override Widget build(BuildContext ctx) {
+    final d=isDark(ctx); final sb=AC.softBrown(d); final lt=AC.lightText(d);
+    return Scaffold(body:Container(decoration:gradBg(d),child:FadeTransition(opacity:_fA,child:SafeArea(child:Column(children:[
+      Padding(padding:const EdgeInsets.fromLTRB(24,20,24,8),child:Row(children:[
+        Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+          Text('AL-AGAP',style:TextStyle(fontSize:26,fontWeight:FontWeight.bold,color:sb,letterSpacing:3)),
+          Text('Rescue • Adopt • Report',style:TextStyle(fontSize:12,color:lt,letterSpacing:1.5)),
+        ]),
+        const Spacer(),
+        if(currentUser!=null) GestureDetector(onTap:(){setState((){});},child:Container(
+          margin:const EdgeInsets.only(right:8),padding:const EdgeInsets.symmetric(horizontal:10,vertical:6),
+          decoration:BoxDecoration(color:AC.gold.withOpacity(0.15),borderRadius:BorderRadius.circular(20),
+            border:Border.all(color:AC.gold.withOpacity(0.4),width:1.5)),
+          child:Row(mainAxisSize:MainAxisSize.min,children:[
+            const Text('🪙',style:TextStyle(fontSize:14)),const SizedBox(width:4),
+            Text('${currentUser!.coins}',style:TextStyle(fontSize:13,fontWeight:FontWeight.bold,color:sb)),
+            if(currentUser!.streak>0)...[const SizedBox(width:6),
+              const Text('🔥',style:TextStyle(fontSize:13)),
+              Text('${currentUser!.streak}',style:TextStyle(fontSize:12,fontWeight:FontWeight.bold,color:AC.streak))],
+          ]))),
+        IconButton(icon:Icon(Icons.settings_outlined,color:sb,size:22),padding:EdgeInsets.zero,
+          onPressed:() async { await Navigator.pushNamed(ctx,'/settings'); setState((){}); }),
+        const SizedBox(width:6),
+        GestureDetector(onTap:() async { await Navigator.pushNamed(ctx,'/profile'); setState((){}); },
+          child:UserAvatar(user:currentUser,size:42,fontSize:17)),
+      ])),
+      Expanded(child:SingleChildScrollView(padding:const EdgeInsets.symmetric(horizontal:24),child:Column(children:[
+        const SizedBox(height:16),
+        _photoArea(d,sb,lt),
+        const SizedBox(height:24),
+        if(_has) _actions(d) else _hints(d),
+        const SizedBox(height:32),
+      ]))),
+    ])))));
+  }
+  Widget _photoArea(bool d,Color sb,Color lt)=>GestureDetector(onTap:!_has?()=>_photo(ImageSource.camera):null,
+    child:AnimatedContainer(duration:const Duration(milliseconds:400),height:_has?300:260,width:double.infinity,
+      decoration:BoxDecoration(color:AC.card(d),borderRadius:BorderRadius.circular(28),
+        border:Border.all(color:_has?AC.sage(d):AC.peach(d).withOpacity(0.4),width:2),
+        boxShadow:[BoxShadow(color:AC.blush(d).withOpacity(0.3),blurRadius:20,offset:const Offset(0,8))]),
+      child:ClipRRect(borderRadius:BorderRadius.circular(26),child:_has
+        ?Stack(fit:StackFit.expand,children:[buildImage(_arg),Positioned(top:12,right:12,child:GestureDetector(onTap:_clear,
+          child:Container(padding:const EdgeInsets.all(6),decoration:BoxDecoration(color:Colors.white.withOpacity(0.85),shape:BoxShape.circle),
+            child:const Icon(Icons.close_rounded,size:18,color:Colors.black54))))])
+        :Column(mainAxisAlignment:MainAxisAlignment.center,children:[
+          Container(width:80,height:80,decoration:BoxDecoration(color:AC.blush(d).withOpacity(0.5),shape:BoxShape.circle),
+            child:Icon(Icons.camera_alt_rounded,size:38,color:AC.peach(d))),
+          const SizedBox(height:16),
+          Text('Take a Photo',style:TextStyle(fontSize:20,fontWeight:FontWeight.bold,color:AC.softBrown(d))),
+          const SizedBox(height:6),
+          Text('Tap to photograph an animal',style:TextStyle(fontSize:13,color:AC.lightText(d))),
+          const SizedBox(height:16),
+          GestureDetector(onTap:()=>_photo(ImageSource.gallery),
+            child:Container(padding:const EdgeInsets.symmetric(horizontal:18,vertical:8),
+              decoration:BoxDecoration(color:AC.sage(d).withOpacity(0.3),borderRadius:BorderRadius.circular(20)),
+              child:Text('or choose from gallery',style:TextStyle(fontSize:12,color:AC.mutedText(d)))))]))));
+  Widget _actions(bool d)=>Column(children:[
+    Text('What would you like to do?',style:TextStyle(fontSize:16,fontWeight:FontWeight.w600,color:AC.mutedText(d),letterSpacing:0.5)),
+    const SizedBox(height:16),
+    Row(children:[
+      Expanded(child:_ACard(emoji:'🏠',label:'Adopt',sub:'Start the process',color:AC.sage(d),onTap:() async {
+        currentUser?.adoptionsCount++;await AppStore.save();
+        if(mounted)Navigator.pushNamed(context,'/adopt',arguments:_arg);})),
+      const SizedBox(width:14),
+      Expanded(child:_ACard(emoji:'📍',label:'Report',sub:'Find nearby help',color:AC.sky(d),onTap:() async {
+        currentUser?.reportsCount++;await AppStore.save();
+        if(mounted)Navigator.pushNamed(context,'/report',arguments:_arg);})),
+    ])]);
+  Widget _hints(bool d)=>Column(children:[
+    _HCard(emoji:'🏠',title:'Adopt an Animal',desc:'Learn legal steps, paperwork, and vet care.',color:AC.sage(d).withOpacity(0.3),d:d),
+    const SizedBox(height:12),
+    _HCard(emoji:'📍',title:'Report & Refer',desc:'Find nearby shelters and send them a photo.',color:AC.sky(d).withOpacity(0.3),d:d)]);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SETTINGS — FIX: toggle rebuilds entire tree via themeNotifier
+// ═══════════════════════════════════════════════════════════════════════════
+class SettingsScreen extends StatelessWidget {
+  const SettingsScreen({super.key});
+  @override Widget build(BuildContext ctx) {
+    return ValueListenableBuilder<bool>(valueListenable:themeNotifier,builder:(ctx,dark,_){
+      final d=dark; final sb=AC.softBrown(d);
+      return Scaffold(body:Container(decoration:gradBg(d),child:SafeArea(child:Column(children:[
+        Padding(padding:const EdgeInsets.fromLTRB(16,16,24,8),child:Row(children:[
+          IconButton(onPressed:()=>Navigator.pop(ctx),icon:const Icon(Icons.arrow_back_ios_new_rounded),color:sb),
+          Text('Settings',style:TextStyle(fontSize:22,fontWeight:FontWeight.bold,color:sb)),
+        ])),
+        Expanded(child:ListView(padding:const EdgeInsets.all(20),children:[
+          _sl('Account',d),
+          _si(Icons.person_outline_rounded,'Profile',AC.peach(d).withOpacity(0.2),d,
+            ()async{await Navigator.pushNamed(ctx,'/profile');}),
+          const SizedBox(height:16),_sl('Appearance',d),
+          // Dark mode toggle — updates themeNotifier immediately
+          Container(padding:const EdgeInsets.symmetric(horizontal:18,vertical:12),
+            decoration:BoxDecoration(color:AC.lavender(d).withOpacity(0.3),borderRadius:BorderRadius.circular(16)),
+            child:Row(children:[Icon(Icons.dark_mode_outlined,color:sb,size:22),const SizedBox(width:14),
+              Text('Dark Mode',style:TextStyle(fontSize:15,color:sb,fontWeight:FontWeight.w500)),
+              const Spacer(),
+              Switch(value:d,activeColor:AC.peach(d),
+                onChanged:(v){ themeNotifier.value=v; appDarkMode=v; AppStore.save(); }),
+            ])),
+          const SizedBox(height:16),_sl('Info',d),
+          _si(Icons.info_outline_rounded,'About the App',AC.sky(d).withOpacity(0.3),d,()=>_about(ctx,d)),
+          const SizedBox(height:8),
+          _si(Icons.code_rounded,'About the Developer',AC.sage(d).withOpacity(0.3),d,()=>_dev(ctx,d)),
+          const SizedBox(height:32),
+          if(currentUser!=null) Center(child:GestureDetector(onTap:() async {
+            await AppStore.clear();currentUser=null;
+            if(ctx.mounted) Navigator.pushNamedAndRemoveUntil(ctx,'/auth',(r)=>false);
+          },child:Container(padding:const EdgeInsets.symmetric(horizontal:36,vertical:14),
+            decoration:BoxDecoration(color:Colors.redAccent.withOpacity(0.1),borderRadius:BorderRadius.circular(20),
+              border:Border.all(color:Colors.redAccent.withOpacity(0.4),width:1.5)),
+            child:const Row(mainAxisSize:MainAxisSize.min,children:[
+              Icon(Icons.logout_rounded,color:Colors.redAccent,size:18),SizedBox(width:8),
+              Text('Log Out',style:TextStyle(color:Colors.redAccent,fontWeight:FontWeight.bold,fontSize:15))])))),
+        ])),
+      ]))));
+    });
+  }
+  Widget _sl(String t,bool d)=>Padding(padding:const EdgeInsets.only(bottom:8),
+    child:Text(t.toUpperCase(),style:TextStyle(fontSize:11,fontWeight:FontWeight.bold,color:AC.lightText(d),letterSpacing:2)));
+  Widget _si(IconData i,String l,Color c,bool d,VoidCallback t)=>GestureDetector(onTap:t,
+    child:Container(margin:const EdgeInsets.only(bottom:8),padding:const EdgeInsets.symmetric(horizontal:18,vertical:16),
+      decoration:BoxDecoration(color:c,borderRadius:BorderRadius.circular(16)),
+      child:Row(children:[Icon(i,color:AC.softBrown(d),size:22),const SizedBox(width:14),
+        Text(l,style:TextStyle(fontSize:15,color:AC.softBrown(d),fontWeight:FontWeight.w500)),
+        const Spacer(),Icon(Icons.arrow_forward_ios_rounded,color:AC.lightText(d),size:14)])));
+  void _about(BuildContext c,bool d)=>showDialog(context:c,builder:(_)=>AlertDialog(
+    backgroundColor:AC.card(d),shape:RoundedRectangleBorder(borderRadius:BorderRadius.circular(24)),
+    title:Row(children:[const Text('🐾 ',style:TextStyle(fontSize:22)),Text('AL-AGAP',style:TextStyle(color:AC.softBrown(d),fontWeight:FontWeight.bold))]),
+    content:Text('AL-AGAP connects stray animals with nearby shelters, vets, and adoption centers.\n\nLog in daily to build your streak and earn coins! 🔥🪙',style:TextStyle(color:AC.mutedText(d),height:1.6,fontSize:14)),
+    actions:[TextButton(onPressed:()=>Navigator.pop(c),child:Text('Close',style:TextStyle(color:AC.peach(d),fontWeight:FontWeight.bold)))]));
+  void _dev(BuildContext c,bool d)=>showDialog(context:c,builder:(_)=>AlertDialog(
+    backgroundColor:AC.card(d),shape:RoundedRectangleBorder(borderRadius:BorderRadius.circular(24)),
+    title:Row(children:[const Text('👨‍💻 ',style:TextStyle(fontSize:22)),Text('Developer',style:TextStyle(color:AC.softBrown(d),fontWeight:FontWeight.bold))]),
+    content:Text('AL-AGAP is built with ❤️ for the animals of the Philippines.\n\nContact: alagap.philippines@gmail.com\n\nBuilt with Flutter • OpenStreetMap • Overpass API • CARTO',style:TextStyle(color:AC.mutedText(d),height:1.6,fontSize:14)),
+    actions:[TextButton(onPressed:()=>Navigator.pop(c),child:Text('Close',style:TextStyle(color:AC.peach(d),fontWeight:FontWeight.bold)))]));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PROFILE
+// ═══════════════════════════════════════════════════════════════════════════
+class ProfileScreen extends StatefulWidget {
+  const ProfileScreen({super.key});
+  @override State<ProfileScreen> createState() => _ProfileScreenState();
+}
+class _ProfileScreenState extends State<ProfileScreen> {
+  late TextEditingController _un,_bio;
+  bool _editing=false;
+  final _picker=ImagePicker();
+  @override void initState() { super.initState();
+    _un=TextEditingController(text:currentUser?.username??'');
+    _bio=TextEditingController(text:currentUser?.bio??''); }
+  @override void dispose() { _un.dispose();_bio.dispose(); super.dispose(); }
+
+  Future<void> _pickPhoto(ImageSource src) async {
+    // Use low quality + small max dimensions to prevent web lag
+    final x=await _picker.pickImage(source:src,imageQuality:50,maxWidth:400,maxHeight:400);
+    if(x==null) return;
+    final raw=await x.readAsBytes();
+    // Cap at 150KB for SharedPreferences performance
+    final capped = raw.length>150*1024 ? Uint8List.fromList(raw.sublist(0,150*1024)) : raw;
+    setState((){currentUser?.avatarBytes=capped;currentUser?.avatarEmoji=null;});
+    await AppStore.save();
+  }
+
+  void _showAvatarPicker() {
+    final d=isDark(context);
+    showModalBottomSheet(context:context,backgroundColor:Colors.transparent,isScrollControlled:true,
+      builder:(_)=>DraggableScrollableSheet(initialChildSize:.55,minChildSize:.4,maxChildSize:.85,expand:false,
+        builder:(_,sc)=>Container(decoration:BoxDecoration(color:AC.card(d),borderRadius:const BorderRadius.vertical(top:Radius.circular(28))),
+          child:ListView(controller:sc,padding:const EdgeInsets.fromLTRB(24,12,24,32),children:[
+            Center(child:Container(width:40,height:4,margin:const EdgeInsets.only(bottom:20),
+              decoration:BoxDecoration(color:Colors.grey.shade400,borderRadius:BorderRadius.circular(2)))),
+            Text('Choose Avatar',style:TextStyle(fontSize:18,fontWeight:FontWeight.bold,color:AC.softBrown(d))),
+            const SizedBox(height:20),
+            Row(children:[
+              Expanded(child:_ABtn(icon:Icons.photo_library_outlined,label:'Gallery',color:AC.sky(d),
+                onTap:(){Navigator.pop(context);_pickPhoto(ImageSource.gallery);})),
+              const SizedBox(width:12),
+              Expanded(child:_ABtn(icon:Icons.camera_alt_outlined,label:'Camera',color:AC.sage(d),
+                onTap:(){Navigator.pop(context);_pickPhoto(ImageSource.camera);})),
+            ]),
+            const SizedBox(height:20),
+            Text('Or pick an animal avatar:',style:TextStyle(fontSize:13,color:AC.lightText(d),fontStyle:FontStyle.italic)),
+            const SizedBox(height:12),
+            GridView.count(crossAxisCount:6,shrinkWrap:true,physics:const NeverScrollableScrollPhysics(),
+              crossAxisSpacing:8,mainAxisSpacing:8,
+              children:kAvatars.map((e){ final sel=currentUser?.avatarEmoji==e&&currentUser?.avatarBytes==null;
+                return GestureDetector(onTap:() async {
+                  setState((){currentUser?.avatarEmoji=e;currentUser?.avatarBytes=null;});
+                  await AppStore.save(); if(mounted){Navigator.pop(context);setState((){}); }
+                },child:AnimatedContainer(duration:const Duration(milliseconds:150),
+                  decoration:BoxDecoration(color:sel?AC.peach(d).withOpacity(0.3):AC.cream(d),
+                    borderRadius:BorderRadius.circular(12),border:Border.all(color:sel?AC.peach(d):Colors.transparent,width:2)),
+                  child:Center(child:Text(e,style:const TextStyle(fontSize:24)))));}).toList()),
+          ]))));
+  }
+
+  Future<void> _save() async {
+    if(currentUser!=null){
+      if(_un.text.trim().isNotEmpty) currentUser!.username=_un.text.trim();
+      currentUser!.bio=_bio.text.trim().isEmpty?null:_bio.text.trim();
+    }
+    await AppStore.save(); setState(()=>_editing=false);
+    if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:const Text('Profile updated!'),
+      backgroundColor:AC.sage(false),behavior:SnackBarBehavior.floating));
+  }
+
+  @override Widget build(BuildContext ctx) {
+    final d=isDark(ctx); final sb=AC.softBrown(d); final lt=AC.lightText(d); final user=currentUser;
+    return Scaffold(body:Container(decoration:gradBg(d),child:SafeArea(child:Column(children:[
+      Padding(padding:const EdgeInsets.fromLTRB(16,16,24,0),child:Row(children:[
+        IconButton(onPressed:()=>Navigator.pop(ctx),icon:const Icon(Icons.arrow_back_ios_new_rounded),color:sb),
+        Text('My Profile',style:TextStyle(fontSize:22,fontWeight:FontWeight.bold,color:sb)),
+        const Spacer(),
+        if(!_editing) GestureDetector(onTap:()=>setState(()=>_editing=true),
+          child:Container(padding:const EdgeInsets.symmetric(horizontal:14,vertical:7),
+            decoration:BoxDecoration(color:AC.peach(d).withOpacity(0.15),borderRadius:BorderRadius.circular(20)),
+            child:Text('Edit',style:TextStyle(color:AC.peach(d),fontWeight:FontWeight.bold,fontSize:14))))
+        else GestureDetector(onTap:_save,
+          child:Container(padding:const EdgeInsets.symmetric(horizontal:14,vertical:7),
+            decoration:BoxDecoration(color:AC.sage(d).withOpacity(0.3),borderRadius:BorderRadius.circular(20)),
+            child:Text('Save',style:TextStyle(color:sb,fontWeight:FontWeight.bold,fontSize:14)))),
+      ])),
+      Expanded(child:SingleChildScrollView(padding:const EdgeInsets.all(24),child:Column(children:[
+        Stack(alignment:Alignment.bottomRight,children:[
+          UserAvatar(user:user,size:100,fontSize:42),
+          GestureDetector(onTap:_showAvatarPicker,child:Container(width:32,height:32,
+            decoration:BoxDecoration(color:AC.peach(d),shape:BoxShape.circle,border:Border.all(color:Colors.white,width:2),
+              boxShadow:[BoxShadow(color:AC.peach(d).withOpacity(0.3),blurRadius:8)]),
+            child:const Icon(Icons.edit_rounded,color:Colors.white,size:16))),
+        ]),
+        const SizedBox(height:12),
+        if(!_editing)...[
+          Text(user?.username??'Guest',style:TextStyle(fontSize:24,fontWeight:FontWeight.bold,color:sb)),
+          Text(user?.email??'',style:TextStyle(fontSize:14,color:lt)),
+          if(user?.bio!=null)...[const SizedBox(height:8),
+            Text(user!.bio!,textAlign:TextAlign.center,style:TextStyle(fontSize:14,color:AC.mutedText(d),fontStyle:FontStyle.italic))],
+        ],
+        const SizedBox(height:20),
+        // Streak card
+        if(user!=null) Container(padding:const EdgeInsets.symmetric(horizontal:20,vertical:14),
+          margin:const EdgeInsets.only(bottom:16),
+          decoration:BoxDecoration(gradient:LinearGradient(colors:[AC.streak.withOpacity(0.1),AC.blush(d).withOpacity(0.2)]),
+            borderRadius:BorderRadius.circular(18),border:Border.all(color:AC.streak.withOpacity(0.3),width:1.5)),
+          child:Row(children:[const Text('🔥',style:TextStyle(fontSize:28)),const SizedBox(width:12),
+            Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+              Text('${user.streak} Day Streak',style:TextStyle(fontSize:18,fontWeight:FontWeight.bold,color:sb)),
+              Text(user.streak>0?'Keep it going! Log in tomorrow for +${math.min(user.streak+1,7)} coins':'Log in daily to build your streak!',
+                style:TextStyle(fontSize:12,color:lt)),
+            ])),
+            GestureDetector(onTap:() async { await AppStore.resetStreak(); setState((){}); },
+              child:Container(padding:const EdgeInsets.symmetric(horizontal:10,vertical:6),
+                decoration:BoxDecoration(color:Colors.redAccent.withOpacity(0.1),borderRadius:BorderRadius.circular(12),
+                  border:Border.all(color:Colors.redAccent.withOpacity(0.3),width:1)),
+                child:const Text('Reset',style:TextStyle(fontSize:11,color:Colors.redAccent,fontWeight:FontWeight.bold)))),
+          ])),
+        // Monthly calendar
+        _Calendar(user:user,d:d),
+        const SizedBox(height:20),
+        if(_editing)...[
+          _pf(_un,'Username',Icons.person_outline_rounded,d),const SizedBox(height:14),
+          _pf(_bio,'Bio',Icons.edit_outlined,d,lines:3),const SizedBox(height:20),
+        ],
+        Row(children:[
+          Expanded(child:_SC(label:'Reports',val:'${user?.reportsCount??0}',emoji:'📍',col:AC.sky(d).withOpacity(0.4),d:d)),
+          const SizedBox(width:14),
+          Expanded(child:_SC(label:'Adoptions',val:'${user?.adoptionsCount??0}',emoji:'🏠',col:AC.sage(d).withOpacity(0.4),d:d)),
+        ]),
+        const SizedBox(height:32),
+      ]))),
+    ]))));
+  }
+  Widget _pf(TextEditingController c,String l,IconData i,bool d,{int lines=1})=>TextField(controller:c,maxLines:lines,
+    style:TextStyle(color:AC.mutedText(d),fontSize:15),decoration:InputDecoration(labelText:l,
+      labelStyle:TextStyle(color:AC.lightText(d),fontSize:14),prefixIcon:Icon(i,color:AC.lightText(d),size:20),
+      filled:true,fillColor:AC.card(d),border:OutlineInputBorder(borderRadius:BorderRadius.circular(14),borderSide:BorderSide.none),
+      enabledBorder:OutlineInputBorder(borderRadius:BorderRadius.circular(14),borderSide:BorderSide(color:AC.blush(d),width:1.5)),
+      focusedBorder:OutlineInputBorder(borderRadius:BorderRadius.circular(14),borderSide:BorderSide(color:AC.peach(d),width:2)),
+      contentPadding:const EdgeInsets.symmetric(horizontal:16,vertical:14)));
+}
+
+// ─── Streak-based coin calendar ──────────────────────────────────────────
+class _Calendar extends StatelessWidget {
+  final AppUser? user; final bool d;
+  const _Calendar({required this.user,required this.d});
+  @override Widget build(BuildContext context) {
+    final now=DateTime.now();
+    final monthName=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][now.month-1];
+    final dim=DateUtils.getDaysInMonth(now.year,now.month);
+    final fw=DateTime(now.year,now.month,1).weekday%7; // 0=Sun
+    final logged=user?.loggedDaysThisMonth??{};
+    final monthly=user?.monthlyLoginCoins??0;
+    final streak=user?.streak??0;
+    final sb=AC.softBrown(d); final lt=AC.lightText(d);
+    // Theoretical max per month (streak caps at 7, ~100 total over 30 days)
+    const maxMonth=100;
+    return Container(padding:const EdgeInsets.all(16),
+      decoration:BoxDecoration(gradient:LinearGradient(colors:[AC.gold.withOpacity(0.1),AC.blush(d).withOpacity(0.15)]),
+        borderRadius:BorderRadius.circular(20),border:Border.all(color:AC.gold.withOpacity(0.3),width:1.5)),
+      child:Column(children:[
+        // Month/year header + coin total
+        Row(children:[
+          Text('$monthName ${now.year}',style:TextStyle(fontSize:15,fontWeight:FontWeight.bold,color:sb)),
+          const Spacer(),
+          const Text('🪙',style:TextStyle(fontSize:16)),const SizedBox(width:4),
+          Text('$monthly/$maxMonth this month',style:TextStyle(fontSize:12,color:lt,fontWeight:FontWeight.w600)),
+        ]),
+        const SizedBox(height:6),
+        // Progress
+        ClipRRect(borderRadius:BorderRadius.circular(4),child:LinearProgressIndicator(
+          value:monthly/maxMonth,minHeight:5,backgroundColor:AC.blush(d).withOpacity(0.3),
+          valueColor:const AlwaysStoppedAnimation<Color>(AC.gold))),
+        const SizedBox(height:4),
+        Row(mainAxisAlignment:MainAxisAlignment.spaceBetween,children:[
+          Text('Streak: $streak day${streak!=1?'s':''}  🔥',style:TextStyle(fontSize:11,color:AC.streak,fontWeight:FontWeight.bold)),
+          Text('Next login: +${math.min(streak+1,7)} 🪙',style:TextStyle(fontSize:11,color:lt)),
+        ]),
+        const SizedBox(height:10),
+        // Day labels
+        Row(mainAxisAlignment:MainAxisAlignment.spaceAround,
+          children:['S','M','T','W','T','F','S'].map((x)=>SizedBox(width:26,
+            child:Text(x,textAlign:TextAlign.center,style:TextStyle(fontSize:9,fontWeight:FontWeight.bold,color:lt)))).toList()),
+        const SizedBox(height:4),
+        // Calendar grid
+        GridView.builder(shrinkWrap:true,physics:const NeverScrollableScrollPhysics(),
+          gridDelegate:const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount:7,mainAxisSpacing:3,crossAxisSpacing:3,childAspectRatio:1),
+          itemCount:fw+dim,
+          itemBuilder:(_,i){
+            if(i<fw) return const SizedBox.shrink();
+            final day=i-fw+1;
+            final isL=logged.contains(day);
+            final isT=day==now.day;
+            final coinVal=user?.coinLog[_dayKey(now.year,now.month,day)]??0;
+            return Container(decoration:BoxDecoration(
+              color:isL?AC.gold.withOpacity(0.8):isT?AC.peach(d).withOpacity(0.35):Colors.transparent,
+              borderRadius:BorderRadius.circular(5),
+              border:isT?Border.all(color:AC.peach(d),width:1.5):null),
+              child:Center(child:isL&&coinVal>0
+                ?Column(mainAxisAlignment:MainAxisAlignment.center,children:[
+                    Text('$day',style:TextStyle(fontSize:8,fontWeight:FontWeight.bold,color:Colors.white)),
+                    Text('+$coinVal',style:const TextStyle(fontSize:7,color:Colors.white,fontWeight:FontWeight.bold))])
+                :Text('$day',style:TextStyle(fontSize:9,fontWeight:isT?FontWeight.bold:FontWeight.normal,color:isL?Colors.white:sb))));
+          }),
+      ]));
+  }
+  static String _dayKey(int y,int m,int day)=>'$y-${m.toString().padLeft(2,'0')}-${day.toString().padLeft(2,'0')}';
+}
+
+class _ABtn extends StatelessWidget {
+  final IconData icon; final String label; final Color color; final VoidCallback onTap;
+  const _ABtn({required this.icon,required this.label,required this.color,required this.onTap});
+  @override Widget build(BuildContext ctx)=>GestureDetector(onTap:onTap,child:Container(padding:const EdgeInsets.symmetric(vertical:14),
+    decoration:BoxDecoration(color:color.withOpacity(0.4),borderRadius:BorderRadius.circular(14),border:Border.all(color:color,width:1.5)),
+    child:Column(children:[Icon(icon,color:AC.softBrown(false),size:26),const SizedBox(height:6),
+      Text(label,style:TextStyle(fontSize:13,fontWeight:FontWeight.w600,color:AC.softBrown(false)))])));
+}
+class _SC extends StatelessWidget {
+  final String label,val,emoji; final Color col; final bool d;
+  const _SC({required this.label,required this.val,required this.emoji,required this.col,required this.d});
+  @override Widget build(BuildContext ctx)=>Container(padding:const EdgeInsets.symmetric(vertical:18,horizontal:16),
+    decoration:BoxDecoration(color:col,borderRadius:BorderRadius.circular(18)),
+    child:Column(children:[Text(emoji,style:const TextStyle(fontSize:28)),const SizedBox(height:8),
+      Text(val,style:TextStyle(fontSize:28,fontWeight:FontWeight.bold,color:AC.softBrown(d))),
+      const SizedBox(height:4),Text(label,style:TextStyle(fontSize:12,color:AC.lightText(d)))]));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ADOPT
+// ═══════════════════════════════════════════════════════════════════════════
+class AdoptScreen extends StatelessWidget {
+  const AdoptScreen({super.key});
+  @override Widget build(BuildContext ctx){
+    final arg=ModalRoute.of(ctx)?.settings.arguments as ImageArg?;
+    final d=isDark(ctx); final sb=AC.softBrown(d);
+    final steps=[
+      _Stp('01','🩺','Visit a Veterinarian','Licensed vet exam, health certificate, microchip check.',AC.blush(d)),
+      _Stp('02','📋','Register the Animal','City hall registration. Bring valid ID and vet certificate.',AC.sage(d).withOpacity(0.6)),
+      _Stp('03','💉','Vaccinations & Deworming','Anti-rabies, distemper vaccines and deworming.',AC.sky(d).withOpacity(0.6)),
+      _Stp('04','📝','Adoption Papers','Shelter agreement with home inspection consent.',AC.lavender(d).withOpacity(0.6)),
+      _Stp('05','🏡','Prepare Your Home','Safe space with food, water, bedding.',AC.peach(d).withOpacity(0.5)),
+      _Stp('06','💛','Ongoing Healthcare','Vet check-ups every 6 months.',AC.sage(d).withOpacity(0.4)),
+    ];
+    return Scaffold(body:Container(decoration:gradBg(d),child:SafeArea(child:Column(children:[
+      Padding(padding:const EdgeInsets.fromLTRB(16,16,24,0),child:Row(children:[
+        IconButton(onPressed:()=>Navigator.pop(ctx),icon:const Icon(Icons.arrow_back_ios_new_rounded),color:sb),
+        Text('Adopt an Animal',style:TextStyle(fontSize:22,fontWeight:FontWeight.bold,color:sb)),
+      ])),
+      Expanded(child:ListView(padding:const EdgeInsets.all(20),children:[
+        if(arg!=null&&arg.hasImage) Container(height:180,margin:const EdgeInsets.only(bottom:20),
+          decoration:BoxDecoration(borderRadius:BorderRadius.circular(20),boxShadow:[BoxShadow(color:AC.peach(d).withOpacity(0.3),blurRadius:16,offset:const Offset(0,6))]),
+          child:ClipRRect(borderRadius:BorderRadius.circular(20),child:buildImage(arg))),
+        Container(padding:const EdgeInsets.all(16),margin:const EdgeInsets.only(bottom:20),
+          decoration:BoxDecoration(color:AC.blush(d).withOpacity(0.5),borderRadius:BorderRadius.circular(16)),
+          child:Row(children:[const Text('🐶',style:TextStyle(fontSize:28)),const SizedBox(width:12),
+            Expanded(child:Text('Follow these steps for a safe and legal adoption.',style:TextStyle(fontSize:13,color:AC.mutedText(d),height:1.5)))])),
+        ...steps.map((s)=>Container(margin:const EdgeInsets.only(bottom:14),padding:const EdgeInsets.all(18),
+          decoration:BoxDecoration(color:s.col,borderRadius:BorderRadius.circular(18),boxShadow:[BoxShadow(color:Colors.black.withOpacity(0.04),blurRadius:8,offset:const Offset(0,3))]),
+          child:Row(crossAxisAlignment:CrossAxisAlignment.start,children:[
+            Column(children:[Text(s.icon,style:const TextStyle(fontSize:28)),const SizedBox(height:4),
+              Text(s.num,style:TextStyle(fontSize:11,fontWeight:FontWeight.bold,color:AC.lightText(d),letterSpacing:1))]),
+            const SizedBox(width:16),
+            Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+              Text(s.title,style:TextStyle(fontSize:16,fontWeight:FontWeight.bold,color:sb)),const SizedBox(height:6),
+              Text(s.desc,style:TextStyle(fontSize:13,color:AC.mutedText(d),height:1.5)),
+            ])),
+          ]))),
+        const SizedBox(height:12),
+      ])),
+    ]))));
+  }
+}
+class _Stp{final String num,icon,title,desc;final Color col;_Stp(this.num,this.icon,this.title,this.desc,this.col);}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// REPORT — Overpass+CORS proxy, CARTO tiles, search autocomplete, LayoutBuilder zero-overflow
+// ═══════════════════════════════════════════════════════════════════════════
+class ReportScreen extends StatefulWidget {
+  const ReportScreen({super.key});
+  @override State<ReportScreen> createState() => _ReportScreenState();
+}
+class _ReportScreenState extends State<ReportScreen> {
+  LatLng? _loc; bool _locating=true; String _locErr='';
+  double _radius=10.0; List<OrgPin> _orgs=[]; bool _fetching=false; OrgPin? _sel;
+  final _sc=TextEditingController();
+  bool _showS=false,_searching=false;
+  List<OrgPin> _sResults=[]; List<String> _sHist=[]; List<String> _suggestions=[];
+
+  @override void initState(){super.initState();_init();}
+  @override void dispose(){_sc.dispose();super.dispose();}
+
+  Future<void> _init() async {
+    final h=await AppStore.getSearchHistory(); setState(()=>_sHist=h);
+    await _getLoc(); }
+
+  Future<void> _getLoc() async {
+    setState((){_locating=true;_locErr='';});
+    try {
+      if(!await Geolocator.isLocationServiceEnabled()){setState((){_locating=false;_locErr='Location services disabled.';});return;}
+      var p=await Geolocator.checkPermission();
+      if(p==LocationPermission.denied) p=await Geolocator.requestPermission();
+      if(p==LocationPermission.denied||p==LocationPermission.deniedForever){setState((){_locating=false;_locErr='Location permission denied.';});return;}
+      final pos=await Geolocator.getCurrentPosition(desiredAccuracy:LocationAccuracy.high);
+      setState((){_loc=LatLng(pos.latitude,pos.longitude);_locating=false;});
+      await _fetchOrgs();
+    } catch(e){setState((){_locating=false;_locErr='Could not get location: $e';});}
+  }
+
+  Future<void> _fetchOrgs() async {
+    if(_loc==null)return; setState(()=>_fetching=true);
+    final o=await fetchOverpassOrgs(_loc!,_radius);
+    setState((){_orgs=o;_fetching=false;}); }
+
+  Future<void> _onSearchChanged(String q) async {
+    if(q.trim().length<2){setState((){_suggestions=[];});return;}
+    final s=await nominatimSuggest(q);
+    setState((){_suggestions=s;}); }
+
+  Future<void> _doSearch(String q) async {
+    if(q.trim().isEmpty)return;
+    _sc.text=q; FocusScope.of(context).unfocus();
+    await AppStore.addSearch(q);
+    final h=await AppStore.getSearchHistory();
+    setState((){_searching=true;_sHist=h;_suggestions=[];});
+    final r=await searchNominatim(q,_loc);
+    setState((){_sResults=r;_searching=false;}); }
+
+  Future<void> _email(OrgPin o) async {
+    final sub=Uri.encodeComponent('Animal Report - AL-AGAP');
+    final body=Uri.encodeComponent('Hello,\n\nReporting a stray animal at (${_loc?.latitude.toStringAsFixed(5)}, ${_loc?.longitude.toStringAsFixed(5)}).\n\nVia AL-AGAP app.\n\nThank you.');
+    final uri=Uri.parse('mailto:?subject=$sub&body=$body');
+    if(await canLaunchUrl(uri)) await launchUrl(uri); else _snack('Could not open email.');}
+  Future<void> _sms(OrgPin o) async {
+    final body=Uri.encodeComponent('Hi! Found stray animal near ${_loc?.latitude.toStringAsFixed(5)},${_loc?.longitude.toStringAsFixed(5)}. Via AL-AGAP.');
+    final uri=Uri.parse('sms:${o.phone??''}?body=$body');
+    if(await canLaunchUrl(uri)) await launchUrl(uri); else _snack('SMS not supported on web.');}
+  void _snack(String m)=>ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(m)));
+  void _sheet(OrgPin o){setState(()=>_sel=o);showModalBottomSheet(context:context,backgroundColor:Colors.transparent,isScrollControlled:true,
+    builder:(_)=>_OrgSheet(org:o,dark:isDark(context),
+      onEmail:(){Navigator.pop(context);_email(o);},
+      onSMS:(){Navigator.pop(context);_sms(o);},
+      onWeb:o.website!=null?(){Navigator.pop(context);launchUrl(Uri.parse(o.website!),mode:LaunchMode.externalApplication);}:null));}
+
+  List<OrgPin> get _disp => _showS&&_sResults.isNotEmpty?_sResults:_orgs;
+
+  @override Widget build(BuildContext ctx){
+    final arg=ModalRoute.of(ctx)?.settings.arguments as ImageArg?;
+    final d=isDark(ctx); final sb=AC.softBrown(d); final lt=AC.lightText(d);
+
+    return Scaffold(body:Container(decoration:gradBg(d),
+      child:SafeArea(child:LayoutBuilder(builder:(ctx2,cons){
+        final totalH=cons.maxHeight;
+        const hH=50.0;
+        final sH=_showS?(_suggestions.isNotEmpty||_sHist.isNotEmpty?110.0:52.0):0.0;
+        final pxH=(arg!=null&&arg.hasImage)?80.0:0.0;
+        const rH=44.0;
+        const orgH=145.0;
+        final mapH=(totalH-hH-sH-pxH-rH-orgH).clamp(80.0,double.infinity);
+
+        return Column(children:[
+
+          // Header
+          SizedBox(height:hH,child:Padding(padding:const EdgeInsets.fromLTRB(12,8,12,4),child:Row(children:[
+            IconButton(onPressed:()=>Navigator.pop(ctx),icon:const Icon(Icons.arrow_back_ios_new_rounded),color:sb,padding:EdgeInsets.zero,constraints:const BoxConstraints()),
+            const SizedBox(width:4),
+            Text('Report Animal',style:TextStyle(fontSize:18,fontWeight:FontWeight.bold,color:sb)),
+            const Spacer(),
+            IconButton(icon:Icon(_showS?Icons.close:Icons.search,color:sb),padding:EdgeInsets.zero,constraints:const BoxConstraints(),
+              onPressed:()=>setState((){_showS=!_showS;if(!_showS){_sResults=[];_sc.clear();_suggestions=[];}})),
+          ]))),
+
+          // Search bar + suggestions + history
+          if(_showS) SizedBox(height:sH,child:Padding(padding:const EdgeInsets.fromLTRB(16,0,16,4),child:Column(mainAxisSize:MainAxisSize.min,children:[
+            TextField(controller:_sc,
+              style:TextStyle(color:AC.mutedText(d),fontSize:13),
+              onChanged:_onSearchChanged,
+              onSubmitted:_doSearch,
+              decoration:InputDecoration(hintText:'Search e.g. PAWS, veterinary, shelter...',hintStyle:TextStyle(color:lt,fontSize:12),
+                prefixIcon:Icon(Icons.search,color:lt,size:18),
+                suffixIcon:_searching?Padding(padding:const EdgeInsets.all(10),child:SizedBox(width:16,height:16,child:CircularProgressIndicator(strokeWidth:2,color:AC.peach(d)))):null,
+                filled:true,fillColor:AC.card(d),
+                border:OutlineInputBorder(borderRadius:BorderRadius.circular(12),borderSide:BorderSide.none),
+                contentPadding:const EdgeInsets.symmetric(horizontal:12,vertical:8))),
+            // Suggestion chips or history chips — use ternary, no if/else in list
+            SizedBox(height:46,child:_suggestions.isNotEmpty
+              ? ListView.separated(scrollDirection:Axis.horizontal,padding:const EdgeInsets.symmetric(vertical:4),
+                  itemCount:_suggestions.length,separatorBuilder:(_,__)=>const SizedBox(width:6),
+                  itemBuilder:(_,i)=>GestureDetector(onTap:()=>_doSearch(_suggestions[i]),
+                    child:Container(padding:const EdgeInsets.symmetric(horizontal:10,vertical:4),
+                      decoration:BoxDecoration(color:AC.sky(d).withOpacity(0.4),borderRadius:BorderRadius.circular(20)),
+                      child:Row(mainAxisSize:MainAxisSize.min,children:[
+                        Icon(Icons.location_on,size:12,color:AC.softBrown(d)),const SizedBox(width:4),
+                        Text(_suggestions[i],style:TextStyle(fontSize:11,color:sb))]))))
+              : (_sHist.isNotEmpty&&_sResults.isEmpty)
+                  ? ListView.separated(scrollDirection:Axis.horizontal,padding:const EdgeInsets.symmetric(vertical:4),
+                      itemCount:_sHist.length,separatorBuilder:(_,__)=>const SizedBox(width:6),
+                      itemBuilder:(_,i)=>GestureDetector(onTap:()=>_doSearch(_sHist[i]),
+                        child:Container(padding:const EdgeInsets.symmetric(horizontal:10,vertical:4),
+                          decoration:BoxDecoration(color:AC.blush(d).withOpacity(0.4),borderRadius:BorderRadius.circular(20)),
+                          child:Row(mainAxisSize:MainAxisSize.min,children:[
+                            Icon(Icons.history,size:12,color:AC.softBrown(d)),const SizedBox(width:4),
+                            Text(_sHist[i],style:TextStyle(fontSize:11,color:sb))]))))
+                  : const SizedBox.shrink()),
+          ]))),
+
+          // Photo strip
+          if(arg!=null&&arg.hasImage) SizedBox(height:pxH,child:Padding(padding:const EdgeInsets.fromLTRB(16,0,16,6),
+            child:ClipRRect(borderRadius:BorderRadius.circular(12),child:buildImage(arg)))),
+
+          // Radius slider
+          SizedBox(height:rH,child:Padding(padding:const EdgeInsets.symmetric(horizontal:16),child:Row(children:[
+            Text('Radius:',style:TextStyle(fontSize:11,color:lt)),const SizedBox(width:6),
+            Expanded(child:SliderTheme(data:SliderThemeData(trackHeight:3,thumbShape:const RoundSliderThumbShape(enabledThumbRadius:7),overlayShape:const RoundSliderOverlayShape(overlayRadius:12)),
+              child:Slider(value:_radius,min:10,max:100,divisions:9,activeColor:AC.peach(d),inactiveColor:AC.blush(d).withOpacity(0.4),
+                onChanged:(v)=>setState(()=>_radius=v),onChangeEnd:(_)=>_fetchOrgs()))),
+            Text('${_radius.toInt()} km',style:TextStyle(fontSize:11,color:lt,fontWeight:FontWeight.bold)),
+            if(_fetching) Padding(padding:const EdgeInsets.only(left:6),child:SizedBox(width:12,height:12,child:CircularProgressIndicator(strokeWidth:2,color:AC.peach(d)))),
+          ]))),
+
+          // Map
+          SizedBox(height:mapH,child:Padding(padding:const EdgeInsets.symmetric(horizontal:16),
+            child:ClipRRect(borderRadius:BorderRadius.circular(18),child:_locating?_loadW(d):_locErr.isNotEmpty?_errW(d)
+              :FlutterMap(options:MapOptions(initialCenter:_loc!,initialZoom:14-math.log(_radius/10)/math.log(2)),children:[
+                TileLayer(urlTemplate:'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+                  subdomains:const['a','b','c','d'],userAgentPackageName:'com.alagap.app',maxZoom:20),
+                RichAttributionWidget(animationConfig:const ScaleRAWA(),attributions:[
+                  TextSourceAttribution('© OpenStreetMap contributors',onTap:()=>launchUrl(Uri.parse('https://openstreetmap.org/copyright'),mode:LaunchMode.externalApplication)),
+                  TextSourceAttribution('© CARTO',onTap:()=>launchUrl(Uri.parse('https://carto.com/attributions'),mode:LaunchMode.externalApplication)),
+                ]),
+                MarkerLayer(markers:[
+                  Marker(point:_loc!,width:40,height:40,child:Container(
+                    decoration:BoxDecoration(color:AC.peach(d),shape:BoxShape.circle,border:Border.all(color:Colors.white,width:3),
+                      boxShadow:[BoxShadow(color:AC.peach(d).withOpacity(0.5),blurRadius:10)]),
+                    child:const Icon(Icons.person_pin_rounded,color:Colors.white,size:20))),
+                  ..._disp.map((o)=>Marker(point:o.position,width:46,height:46,
+                    child:GestureDetector(onTap:()=>_sheet(o),child:AnimatedContainer(duration:const Duration(milliseconds:200),
+                      decoration:BoxDecoration(color:_sel==o?AC.softBrown(d):o.pinColor(d),shape:BoxShape.circle,
+                        border:Border.all(color:_sel==o?Colors.white:AC.peach(d),width:2),
+                        boxShadow:[BoxShadow(color:Colors.black.withOpacity(0.15),blurRadius:8,offset:const Offset(0,3))]),
+                      child:Center(child:Text(o.emoji,style:const TextStyle(fontSize:20))))))),
+                ]),
+              ])))),
+
+          // Org list — ConstrainedBox + Flexible = zero overflow guaranteed
+          ConstrainedBox(constraints:const BoxConstraints(maxHeight:orgH),child:Column(mainAxisSize:MainAxisSize.min,crossAxisAlignment:CrossAxisAlignment.start,children:[
+            Padding(padding:const EdgeInsets.fromLTRB(16,6,16,4),child:Text(
+              _showS&&_sResults.isNotEmpty?'Search Results (${_sResults.length})':'Nearby (${_orgs.length} found)',
+              style:TextStyle(fontSize:12,fontWeight:FontWeight.bold,color:sb))),
+            Flexible(child:_locating?const SizedBox():_disp.isEmpty
+              ?Center(child:Padding(padding:const EdgeInsets.all(8),child:Text('No organizations found. Try increasing the radius.',style:TextStyle(fontSize:11,color:lt),textAlign:TextAlign.center)))
+              :ListView.separated(padding:const EdgeInsets.fromLTRB(16,0,16,8),scrollDirection:Axis.horizontal,
+                itemCount:_disp.length,separatorBuilder:(_,__)=>const SizedBox(width:8),
+                itemBuilder:(_,i){final o=_disp[i];final sel=_sel==o;
+                  return GestureDetector(onTap:()=>_sheet(o),child:AnimatedContainer(duration:const Duration(milliseconds:200),
+                    width:112,padding:const EdgeInsets.all(9),
+                    decoration:BoxDecoration(color:sel?o.pinColor(d).withOpacity(0.9):o.pinColor(d).withOpacity(0.5),
+                      borderRadius:BorderRadius.circular(13),border:Border.all(color:sel?AC.softBrown(d).withOpacity(0.5):Colors.transparent,width:2)),
+                    child:Column(crossAxisAlignment:CrossAxisAlignment.start,mainAxisAlignment:MainAxisAlignment.center,children:[
+                      Text(o.emoji,style:const TextStyle(fontSize:18)),const SizedBox(height:3),
+                      Text(o.name,maxLines:2,overflow:TextOverflow.ellipsis,style:TextStyle(fontSize:10,fontWeight:FontWeight.bold,color:sb)),
+                      Text(o.typeLabel,maxLines:1,overflow:TextOverflow.ellipsis,style:TextStyle(fontSize:9,color:lt)),
+                      Text(o.distanceLabel,style:TextStyle(fontSize:9,color:lt)),const SizedBox(height:3),
+                      Container(padding:const EdgeInsets.symmetric(horizontal:6,vertical:2),
+                        decoration:BoxDecoration(color:Colors.white.withOpacity(0.6),borderRadius:BorderRadius.circular(8)),
+                        child:Text('Contact',style:TextStyle(fontSize:9,fontWeight:FontWeight.bold,color:sb))),
+                    ])));})
+            ),
+          ])),
+
+        ]);
+      }))));
+  }
+  Widget _loadW(bool d)=>Container(color:AC.sky(d).withOpacity(0.2),child:Center(child:Column(mainAxisSize:MainAxisSize.min,children:[
+    CircularProgressIndicator(color:AC.peach(d)),const SizedBox(height:12),Text('Getting your location...',style:TextStyle(color:AC.mutedText(d)))])));
+  Widget _errW(bool d)=>Container(color:AC.blush(d).withOpacity(0.3),child:Center(child:Padding(padding:const EdgeInsets.all(24),
+    child:Column(mainAxisSize:MainAxisSize.min,children:[const Text('📍',style:TextStyle(fontSize:40)),const SizedBox(height:12),
+      Text(_locErr,textAlign:TextAlign.center,style:TextStyle(color:AC.mutedText(d))),const SizedBox(height:16),
+      GestureDetector(onTap:_getLoc,child:Container(padding:const EdgeInsets.symmetric(horizontal:20,vertical:10),
+        decoration:BoxDecoration(color:AC.peach(d),borderRadius:BorderRadius.circular(20)),
+        child:const Text('Retry',style:TextStyle(color:Colors.white,fontWeight:FontWeight.bold))))]))));
+}
+
+// ─── Org Bottom Sheet ──────────────────────────────────────────────────────
+class _OrgSheet extends StatelessWidget {
+  final OrgPin org; final bool dark; final VoidCallback onEmail,onSMS; final VoidCallback? onWeb;
+  const _OrgSheet({required this.org,required this.dark,required this.onEmail,required this.onSMS,this.onWeb});
+  @override Widget build(BuildContext ctx){
+    final sb=AC.softBrown(dark); final lt=AC.lightText(dark); final mt=AC.mutedText(dark);
+    return Container(margin:const EdgeInsets.all(16),padding:const EdgeInsets.all(24),
+      decoration:BoxDecoration(color:AC.card(dark),borderRadius:BorderRadius.circular(28),
+        boxShadow:[BoxShadow(color:Colors.black.withOpacity(0.15),blurRadius:20,offset:const Offset(0,-4))]),
+      child:Column(mainAxisSize:MainAxisSize.min,children:[
+        Container(width:40,height:4,decoration:BoxDecoration(color:Colors.grey.shade400,borderRadius:BorderRadius.circular(2))),
+        const SizedBox(height:20),
+        Row(children:[
+          Container(width:56,height:56,decoration:BoxDecoration(color:org.pinColor(dark),borderRadius:BorderRadius.circular(16)),
+            child:Center(child:Text(org.emoji,style:const TextStyle(fontSize:28)))),
+          const SizedBox(width:16),
+          Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+            Text(org.name,style:TextStyle(fontSize:16,fontWeight:FontWeight.bold,color:sb),maxLines:2,overflow:TextOverflow.ellipsis),
+            const SizedBox(height:3),
+            Text(org.typeLabel,style:TextStyle(fontSize:13,color:lt)),
+            Text('📍 ${org.distanceLabel} away',style:TextStyle(fontSize:12,color:lt)),
+            if(org.phone!=null)Text('📞 ${org.phone}',style:TextStyle(fontSize:11,color:mt)),
+          ])),
+        ]),
+        const SizedBox(height:20),
+        Text('Send animal report via:',style:TextStyle(fontSize:14,color:mt,fontWeight:FontWeight.w500)),
+        const SizedBox(height:14),
+        IntrinsicHeight(child:Row(children:[
+          Expanded(child:_CB(icon:Icons.email_rounded,label:'Email',color:AC.sky(dark),dark:dark,onTap:onEmail)),
+          const SizedBox(width:10),
+          Expanded(child:_CB(icon:Icons.sms_rounded,label:'SMS',color:AC.sage(dark),dark:dark,onTap:onSMS)),
+          if(onWeb!=null)...[const SizedBox(width:10),
+            Expanded(child:_CB(icon:Icons.language_rounded,label:'Website',color:AC.lavender(dark),dark:dark,onTap:onWeb!))],
+        ])),
+        const SizedBox(height:8),
+      ]));
+  }
+}
+class _CB extends StatelessWidget {
+  final IconData icon; final String label; final Color color; final bool dark; final VoidCallback onTap;
+  const _CB({required this.icon,required this.label,required this.color,required this.dark,required this.onTap});
+  @override Widget build(BuildContext ctx)=>GestureDetector(onTap:onTap,child:Container(padding:const EdgeInsets.symmetric(vertical:12,horizontal:8),
+    decoration:BoxDecoration(color:color.withOpacity(0.35),borderRadius:BorderRadius.circular(16),border:Border.all(color:color,width:1.5)),
+    child:Column(mainAxisSize:MainAxisSize.min,children:[Icon(icon,color:AC.softBrown(dark),size:24),const SizedBox(height:4),
+      Text(label,style:TextStyle(fontWeight:FontWeight.bold,color:AC.softBrown(dark),fontSize:12),textAlign:TextAlign.center)])));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SHARED SMALL WIDGETS
+// ═══════════════════════════════════════════════════════════════════════════
+class _ACard extends StatefulWidget {
+  final String emoji,label,sub; final Color color; final VoidCallback onTap;
+  const _ACard({required this.emoji,required this.label,required this.sub,required this.color,required this.onTap});
+  @override State<_ACard> createState()=>_ACardState();
+}
+class _ACardState extends State<_ACard> with SingleTickerProviderStateMixin {
+  late AnimationController _c; late Animation<double> _sc;
+  @override void initState(){super.initState();_c=AnimationController(vsync:this,duration:const Duration(milliseconds:120));_sc=Tween(begin:1.0,end:.95).animate(_c);}
+  @override void dispose(){_c.dispose();super.dispose();}
+  @override Widget build(BuildContext ctx){final d=isDark(ctx);
+    return GestureDetector(onTapDown:(_)=>_c.forward(),onTapUp:(_){_c.reverse();widget.onTap();},onTapCancel:()=>_c.reverse(),
+      child:ScaleTransition(scale:_sc,child:Container(padding:const EdgeInsets.all(20),
+        decoration:BoxDecoration(color:widget.color,borderRadius:BorderRadius.circular(22),boxShadow:[BoxShadow(color:widget.color.withOpacity(0.4),blurRadius:14,offset:const Offset(0,6))]),
+        child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(widget.emoji,style:const TextStyle(fontSize:32)),const SizedBox(height:10),
+          Text(widget.label,style:TextStyle(fontSize:18,fontWeight:FontWeight.bold,color:AC.softBrown(d))),const SizedBox(height:4),
+          Text(widget.sub,style:TextStyle(fontSize:12,color:AC.mutedText(d)))]))));}
+}
+class _HCard extends StatelessWidget {
+  final String emoji,title,desc; final Color color; final bool d;
+  const _HCard({required this.emoji,required this.title,required this.desc,required this.color,required this.d});
+  @override Widget build(BuildContext ctx)=>Container(padding:const EdgeInsets.all(18),decoration:BoxDecoration(color:color,borderRadius:BorderRadius.circular(18)),
+    child:Row(children:[Text(emoji,style:const TextStyle(fontSize:28)),const SizedBox(width:14),
+      Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+        Text(title,style:TextStyle(fontWeight:FontWeight.bold,color:AC.softBrown(d),fontSize:15)),const SizedBox(height:3),
+        Text(desc,style:TextStyle(fontSize:12,color:AC.mutedText(d)))]))]));
+}
