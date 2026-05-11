@@ -682,6 +682,7 @@ class App extends StatelessWidget {
           initialRoute: '/',
           routes: {
             '/':         (_) => const Router_(),
+            '/splash':   (_) => const SplashScreen(),
             '/terms':    (_) => const TermsScreen(),
             '/onboard':  (_) => const OnboardScreen(),
             '/auth':     (_) => const AuthScreen(),
@@ -704,13 +705,7 @@ class Router_ extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (curUser == null || !curUser!.agreedTerms) {
-        Navigator.pushReplacementNamed(context, '/terms');
-      } else if (curUser!.firstTime) {
-        Navigator.pushReplacementNamed(context, '/onboard');
-      } else {
-        Navigator.pushReplacementNamed(context, '/home');
-      }
+      Navigator.pushReplacementNamed(context, '/splash');
     });
     return const Scaffold(body: Center(child: CircularProgressIndicator()));
   }
@@ -4563,7 +4558,91 @@ class UAv extends StatelessWidget {
     child: Center(child: ch),
   );
 }
+class SplashScreen extends StatefulWidget {
+  const SplashScreen({super.key});
+  @override State<SplashScreen> createState() => _SplashS();
+}
 
+class _SplashS extends State<SplashScreen> with SingleTickerProviderStateMixin {
+  late AnimationController _c;
+  late Animation<double> _fa, _sc;
+
+  @override
+  void initState() {
+    super.initState();
+    _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 1200));
+    _fa = CurvedAnimation(parent: _c, curve: Curves.easeIn);
+    _sc = Tween(begin: 0.7, end: 1.0).animate(CurvedAnimation(parent: _c, curve: Curves.elasticOut));
+    _c.forward();
+    Future.delayed(const Duration(milliseconds: 2800), () {
+      if (!mounted) return;
+      if (curUser == null || !curUser!.agreedTerms) {
+        Navigator.pushReplacementNamed(context, '/terms');
+      } else if (curUser!.firstTime) {
+        Navigator.pushReplacementNamed(context, '/onboard');
+      } else {
+        Navigator.pushReplacementNamed(context, '/home');
+      }
+    });
+  }
+
+  @override
+  void dispose() { _c.dispose(); super.dispose(); }
+
+  @override
+  Widget build(BuildContext ctx) {
+    final d = dark(ctx);
+    return Scaffold(
+      body: Container(
+        decoration: gbg(d),
+        child: Center(
+          child: FadeTransition(
+            opacity: _fa,
+            child: ScaleTransition(
+              scale: _sc,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  appLogo(size: 130),
+                  const SizedBox(height: 20),
+                  Text(
+                    'ALAG-AP',
+                    style: TextStyle(
+                      fontSize: 36,
+                      fontWeight: FontWeight.bold,
+                      color: AC.sb(d),
+                      letterSpacing: 6,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Every stray deserves a way home.',
+                    style: TextStyle(
+                      fontSize: 15,
+                      color: AC.peach(d),
+                      fontStyle: FontStyle.italic,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.4,
+                    ),
+                  ),
+                  const SizedBox(height: 48),
+                  SizedBox(
+                    width: 28,
+                    height: 28,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.5,
+                      color: AC.peach(d),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
 // ─────────────────────────────────────────────────────────────────────────────
 // TERMS SCREEN  ← LOGO ADDED
 // ─────────────────────────────────────────────────────────────────────────────

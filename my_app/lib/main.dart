@@ -6412,72 +6412,1133 @@ class _ProfileS extends State<ProfileScreen> {
   }
 }
 
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PASTE THIS ENTIRE FILE'S CONTENT INTO YOUR main.dart, REPLACING THESE SECTIONS:
+//   1. The `AdoptionCase` class
+//   2. The `AdoptSt` class
+//   3. The `AdoptScreen` class and `_AdoptS` state
+//   4. The `_Stp` helper class at the bottom
+// ═══════════════════════════════════════════════════════════════════════════════
+
 // ─────────────────────────────────────────────────────────────────────────────
-// ADOPT SCREEN
+// ADOPTION CASE MODEL  (replaces old AdoptionCase)
 // ─────────────────────────────────────────────────────────────────────────────
-class AdoptScreen extends StatelessWidget {
+class AdoptionCase {
+  final String id, name, emoji;
+  final DateTime addedAt;
+  List<bool> steps;
+  String? imagePath;   // ← NEW: stores base64-encoded image
+
+  AdoptionCase({
+    required this.id,
+    required this.name,
+    required this.emoji,
+    required this.addedAt,
+    List<bool>? steps,
+    this.imagePath,
+  }) : steps = steps ?? List.filled(6, false);
+
+  double get progress => steps.where((s) => s).length / steps.length;
+  int    get completedCount => steps.where((s) => s).length;
+  bool   get isComplete => steps.every((s) => s);
+
+  Map<String, dynamic> toJson() => {
+    'id':        id,
+    'name':      name,
+    'emoji':     emoji,
+    'addedAt':   addedAt.toIso8601String(),
+    'steps':     steps,
+    'imagePath': imagePath,   // ← NEW
+  };
+
+  factory AdoptionCase.fromJson(Map<String, dynamic> j) => AdoptionCase(
+    id:        j['id'],
+    name:      j['name'],
+    emoji:     j['emoji'],
+    addedAt:   DateTime.parse(j['addedAt']),
+    steps:     List<bool>.from(j['steps']),
+    imagePath: j['imagePath'] as String?,  // ← NEW
+  );
+
+  // Helper: decode stored base64 image back to bytes
+  Uint8List? get imageBytes {
+    if (imagePath == null) return null;
+    try { return base64Decode(imagePath!); } catch (_) { return null; }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PATCH: Replace the AdoptSt class in your main.dart with this version.
+// It seeds two demo cases (Brownie the dog + Serpico the ball python)
+// the first time the app loads, so "My Cases" is never empty.
+// ─────────────────────────────────────────────────────────────────────────────
+
+class AdoptSt {
+  static const _key = 'adopt_cases';
+
+  static Future<List<AdoptionCase>> load() async {
+    final p = await SharedPreferences.getInstance();
+    final raw = p.getString(_key);
+
+    // ── If data already exists, return it ────────────────────────────────────
+    if (raw != null) {
+      try {
+        final list = jsonDecode(raw) as List;
+        return list
+            .map((e) => AdoptionCase.fromJson(e as Map<String, dynamic>))
+            .toList();
+      } catch (_) {
+        return [];
+      }
+    }
+
+    // ── First launch: seed two demo cases ────────────────────────────────────
+    final demo = _seedCases();
+    await save(demo);
+    return demo;
+  }
+
+  /// Returns the two pre-populated demo adoption cases.
+  static List<AdoptionCase> _seedCases() {
+    // Brownie – Aspin dog, rescued Jan 2025, 3 of 6 steps done
+    final brownie = AdoptionCase(
+      id:      'demo_brownie',
+      name:    'Brownie',
+      emoji:   '🐶',
+      addedAt: DateTime(2025, 1, 15),
+      steps:   [true, true, true, false, false, false], // step 1-3 done
+    );
+
+    // Serpico – Ball python, rescued Mar 2025, 0 steps done
+    final serpico = AdoptionCase(
+      id:      'demo_serpico',
+      name:    'Serpico',
+      emoji:   '🐍',
+      addedAt: DateTime(2025, 3, 10),
+      steps:   [false, false, false, false, false, false], // vet overdue
+    );
+
+    return [brownie, serpico];
+  }
+
+  static Future<void> save(List<AdoptionCase> cases) async {
+    final p = await SharedPreferences.getInstance();
+    await p.setString(
+      _key,
+      jsonEncode(cases.map((c) => c.toJson()).toList()),
+    );
+  }
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PATCH 2: In _AdoptS, update _buildStatusBadge() to match the screenshots.
+// Add this method inside the _AdoptS class (replaces any existing badge logic).
+//
+// It shows:
+//   • "In progress — step N of 6"  when 1–5 steps done
+//   • "Action needed — vet check overdue"  when 0 steps done
+//   • "Complete ✓"  when all 6 done
+// ─────────────────────────────────────────────────────────────────────────────
+
+  Widget _buildStatusBadge(AdoptionCase c, bool d) {
+    if (c.isComplete) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: Colors.green.withOpacity(0.15),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: Colors.green.withOpacity(0.4), width: 1),
+        ),
+        child: const Text(
+          'Complete ✓',
+          style: TextStyle(fontSize: 11, color: Colors.green, fontWeight: FontWeight.bold),
+        ),
+      );
+    }
+
+    if (c.completedCount == 0) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFEF0E6),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: const Color(0xFFE8A87C), width: 1),
+        ),
+        child: const Text(
+          'Action needed — vet check overdue',
+          style: TextStyle(
+            fontSize: 11,
+            color: Color(0xFFB85D0A),
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      );
+    }
+
+    // Find the index of the first incomplete step (1-based for display)
+    final nextStep = c.steps.indexWhere((s) => !s) + 1;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: const Color(0xFFE8F0FD),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFF8AB4F8), width: 1),
+      ),
+      child: Text(
+        'In progress — step $nextStep of 6',
+        style: const TextStyle(
+          fontSize: 11,
+          color: Color(0xFF1A56C4),
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+    );
+  }
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PATCH 3: In the "My Cases" tab itemBuilder, replace the existing badge line:
+//
+//   BEFORE (inside the card Column > Row children):
+//     if (c.isComplete)
+//       Container( ... )
+//
+//   AFTER — add this right below the animal name Text widget in the card:
+//     _buildStatusBadge(c, d),
+//     const SizedBox(height: 4),
+//
+// Also update the progress label text to match screenshot style.
+// Find this text inside the itemBuilder and update it:
+//
+//   BEFORE:
+//     Text(
+//       '${c.completedCount}/6 steps · '
+//       '${(c.progress * 100).toInt()}%',
+//       ...
+//     ),
+//
+//   AFTER:
+//     Text(
+//       c.completedCount == 0
+//         ? '${c.completedCount} of 6 steps complete · awaiting first vet visit'
+//         : '${c.completedCount} of 6 steps complete · ${(c.progress * 100).toInt()}%',
+//       style: TextStyle(
+//         fontSize: 12,
+//         color: c.isComplete
+//             ? Colors.green
+//             : c.completedCount == 0
+//                 ? const Color(0xFFB85D0A)
+//                 : AC.lt(d),
+//         fontWeight: c.isComplete || c.completedCount == 0
+//             ? FontWeight.bold
+//             : FontWeight.normal,
+//       ),
+//     ),
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ADOPT SCREEN  (replaces old AdoptScreen + _AdoptS)
+// ─────────────────────────────────────────────────────────────────────────────
+class AdoptScreen extends StatefulWidget {
   const AdoptScreen({super.key});
+  @override State<AdoptScreen> createState() => _AdoptS();
+}
+
+class _AdoptS extends State<AdoptScreen> with SingleTickerProviderStateMixin {
+  late TabController _tab;
+  List<AdoptionCase> _cases   = [];
+  bool               _loading = true;
+  final _picker = ImagePicker();
+
+  // ── Step definitions ────────────────────────────────────────────────────────
+  static const _stepInfo = [
+    _Stp('01','🩺','Visit a Veterinarian',
+        'A licensed vet must perform a physical exam and issue a health certificate. '
+        'This ensures the animal is healthy before adoption.\n\n'
+        '• Book an appointment with a PAWS-accredited vet\n'
+        '• Bring the animal in a secure carrier\n'
+        '• Request a complete health record\n'
+        '• Check for existing microchip',
+        null),
+    _Stp('02','📋','Register the Animal',
+        'All adopted animals must be registered at your City Hall or Barangay Hall within '
+        '30 days of adoption.\n\n'
+        '• Bring a valid government-issued ID\n'
+        '• Present the vet health certificate\n'
+        '• Pay the registration fee (varies per city)\n'
+        '• Keep the registration tag on the animal',
+        null),
+    _Stp('03','💉','Vaccinations',
+        'Core vaccines protect your pet and the community from preventable diseases.\n\n'
+        '• Anti-rabies vaccine (required by law in PH)\n'
+        '• Distemper / Parvovirus combo\n'
+        '• Deworming every 3–6 months\n'
+        '• Keep the vaccination booklet updated',
+        null),
+    _Stp('04','📝','Adoption Papers',
+        'Formal adoption paperwork protects both you and the animal.\n\n'
+        '• Sign the shelter\'s adoption agreement\n'
+        '• Agree to a home inspection within 30 days\n'
+        '• Provide proof of residence\n'
+        '• Receive the animal\'s history / medical records',
+        null),
+    _Stp('05','🏡','Prepare Your Home',
+        'A safe, loving environment is essential for your new pet\'s adjustment.\n\n'
+        '• Set up a dedicated sleeping area\n'
+        '• Pet-proof dangerous areas (cables, chemicals)\n'
+        '• Stock food, water bowls, and litter (for cats)\n'
+        '• Plan an introductory routine for the first week',
+        null),
+    _Stp('06','💛','Ongoing Healthcare',
+        'Responsible pet ownership means continued commitment to health.\n\n'
+        '• Vet check-up every 6 months\n'
+        '• Annual booster vaccines\n'
+        '• Spay/neuter if not already done\n'
+        '• Update registration annually',
+        null),
+  ];
+
+  static const _stepColors = [
+    Color(0xFFFFD6CC),
+    Color(0xFFB5D5C5),
+    Color(0xFFBFDEF5),
+    Color(0xFFD8CCF0),
+    Color(0xFFFFB5A0),
+    Color(0xFFB5D5C5),
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _tab = TabController(length: 2, vsync: this);
+    _loadCases();
+  }
+
+  @override
+  void dispose() { _tab.dispose(); super.dispose(); }
+
+  Future<void> _loadCases() async {
+    final c = await AdoptSt.load();
+    setState(() { _cases = c; _loading = false; });
+  }
+
+  // ── Pick image helper ────────────────────────────────────────────────────────
+  Future<String?> _pickImageAsBase64(ImageSource source) async {
+    final x = await _picker.pickImage(
+      source: source, imageQuality: 60, maxWidth: 600, maxHeight: 600,
+    );
+    if (x == null) return null;
+    final raw = await x.readAsBytes();
+    // Cap at 200 KB to avoid SharedPreferences bloat
+    final cap = raw.length > 200 * 1024
+        ? Uint8List.fromList(raw.sublist(0, 200 * 1024))
+        : raw;
+    return base64Encode(cap);
+  }
+
+  // ── Attach / change image for an existing case ───────────────────────────────
+  Future<void> _attachImage(AdoptionCase c) async {
+    final d = dark(context);
+    final source = await showModalBottomSheet<ImageSource?>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _ImageSourceSheet(d: d),
+    );
+    if (source == null) return;
+    final b64 = await _pickImageAsBase64(source);
+    if (b64 == null) return;
+    setState(() => c.imagePath = b64);
+    await AdoptSt.save(_cases);
+  }
+
+  // ── Add new case ─────────────────────────────────────────────────────────────
+  Future<void> _addCase() async {
+    final emojis = ['🐶','🐱','🐰','🐹','🐾','🦴','🐕','🐈','🐇','🦮'];
+    final nameCtrl = TextEditingController();
+    String  selEmoji  = emojis[0];
+    String? b64Image;
+    final d = dark(context);
+
+    await showDialog(
+      context: context,
+      builder: (_) => StatefulBuilder(
+        builder: (ctx, setSt) => AlertDialog(
+          backgroundColor: AC.card(d),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+          title: Text('New Adoption Case',
+              style: TextStyle(color: AC.sb(d), fontWeight: FontWeight.bold)),
+          content: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
+
+            // ── Photo picker ──────────────────────────────────────────────
+            GestureDetector(
+              onTap: () async {
+                final source = await showModalBottomSheet<ImageSource?>(
+                  context: ctx,
+                  backgroundColor: Colors.transparent,
+                  builder: (_) => _ImageSourceSheet(d: d),
+                );
+                if (source == null) return;
+                final x = await _picker.pickImage(
+                  source: source, imageQuality: 60, maxWidth: 600, maxHeight: 600,
+                );
+                if (x == null) return;
+                final raw = await x.readAsBytes();
+                final cap = raw.length > 200 * 1024
+                    ? Uint8List.fromList(raw.sublist(0, 200 * 1024))
+                    : raw;
+                setSt(() => b64Image = base64Encode(cap));
+              },
+              child: Container(
+                height: 110, width: double.infinity,
+                decoration: BoxDecoration(
+                  color: AC.cream(d),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: AC.blush(d), width: 1.5),
+                ),
+                child: b64Image != null
+                    ? ClipRRect(
+                        borderRadius: BorderRadius.circular(13),
+                        child: Image.memory(base64Decode(b64Image!), fit: BoxFit.cover),
+                      )
+                    : Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                        Icon(Icons.add_a_photo_outlined, color: AC.peach(d), size: 30),
+                        const SizedBox(height: 6),
+                        Text('Add photo (optional)',
+                            style: TextStyle(fontSize: 12, color: AC.lt(d))),
+                      ]),
+              ),
+            ),
+            const SizedBox(height: 14),
+
+            // ── Emoji row ─────────────────────────────────────────────────
+            SizedBox(
+              height: 48,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: emojis.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 6),
+                itemBuilder: (_, i) {
+                  final e   = emojis[i];
+                  final sel = selEmoji == e;
+                  return GestureDetector(
+                    onTap: () => setSt(() => selEmoji = e),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 150),
+                      width: 40, height: 40,
+                      decoration: BoxDecoration(
+                        color: sel ? AC.peach(d).withOpacity(0.3) : AC.cream(d),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: sel ? AC.peach(d) : Colors.transparent, width: 2),
+                      ),
+                      child: Center(child: Text(e, style: const TextStyle(fontSize: 22))),
+                    ),
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 14),
+
+            // ── Name field ────────────────────────────────────────────────
+            TextField(
+              controller: nameCtrl,
+              style: TextStyle(color: AC.mt(d)),
+              decoration: InputDecoration(
+                hintText: 'Animal name (e.g. Brownie)',
+                hintStyle: TextStyle(color: AC.lt(d), fontSize: 13),
+                filled: true, fillColor: AC.cream(d),
+                border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide.none),
+                contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 14, vertical: 10),
+              ),
+            ),
+          ])),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text('Cancel', style: TextStyle(color: AC.lt(d))),
+            ),
+            TextButton(
+              onPressed: () {
+                if (nameCtrl.text.trim().isEmpty) return;
+                Navigator.pop(ctx);
+              },
+              child: Text('Add',
+                  style: TextStyle(color: AC.peach(d), fontWeight: FontWeight.bold)),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (nameCtrl.text.trim().isEmpty) return;
+
+    final nc = AdoptionCase(
+      id:        '${DateTime.now().millisecondsSinceEpoch}',
+      name:      nameCtrl.text.trim(),
+      emoji:     selEmoji,
+      addedAt:   DateTime.now(),
+      imagePath: b64Image,   // ← saved image
+    );
+    setState(() => _cases.insert(0, nc));
+    await AdoptSt.save(_cases);
+    _tab.animateTo(1);
+  }
+
+  Future<void> _deleteCase(AdoptionCase c) async {
+    setState(() => _cases.remove(c));
+    await AdoptSt.save(_cases);
+  }
+
+  Future<void> _toggleStep(AdoptionCase c, int idx) async {
+    setState(() => c.steps[idx] = !c.steps[idx]);
+    await AdoptSt.save(_cases);
+  }
+
+  // ── Case detail bottom sheet ─────────────────────────────────────────────────
+  void _openCaseDetail(AdoptionCase c) {
+    final d = dark(context);
+    showModalBottomSheet(
+      context:  context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => StatefulBuilder(
+        builder: (ctx, setSt) => DraggableScrollableSheet(
+          initialChildSize: 0.90,
+          maxChildSize:     0.97,
+          minChildSize:     0.55,
+          expand: false,
+          builder: (_, sc) => Container(
+            decoration: BoxDecoration(
+              color: AC.card(d),
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+            ),
+            child: ListView(
+              controller: sc,
+              padding: const EdgeInsets.fromLTRB(24, 12, 24, 32),
+              children: [
+
+                // handle
+                Center(child: Container(
+                  width: 40, height: 4, margin: const EdgeInsets.only(bottom: 16),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade400,
+                    borderRadius: BorderRadius.circular(2)),
+                )),
+
+                // ── Animal photo ──────────────────────────────────────────
+                GestureDetector(
+                  onTap: () async {
+                    final source = await showModalBottomSheet<ImageSource?>(
+                      context: ctx,
+                      backgroundColor: Colors.transparent,
+                      builder: (_) => _ImageSourceSheet(d: d),
+                    );
+                    if (source == null) return;
+                    final b64 = await _pickImageAsBase64(source);
+                    if (b64 == null) return;
+                    setSt(() => c.imagePath = b64);
+                    setState(() {});
+                    await AdoptSt.save(_cases);
+                  },
+                  child: Container(
+                    height: 180, width: double.infinity,
+                    margin: const EdgeInsets.only(bottom: 16),
+                    decoration: BoxDecoration(
+                      color: AC.cream(d),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: c.imagePath != null ? AC.sage(d) : AC.blush(d),
+                        width: 2),
+                    ),
+                    child: c.imageBytes != null
+                        ? Stack(fit: StackFit.expand, children: [
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(18),
+                              child: Image.memory(c.imageBytes!, fit: BoxFit.cover),
+                            ),
+                            Positioned(
+                              bottom: 10, right: 10,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 10, vertical: 5),
+                                decoration: BoxDecoration(
+                                  color: Colors.black.withOpacity(0.55),
+                                  borderRadius: BorderRadius.circular(12)),
+                                child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                                  Icon(Icons.edit, color: Colors.white, size: 12),
+                                  SizedBox(width: 4),
+                                  Text('Change photo',
+                                      style: TextStyle(color: Colors.white, fontSize: 11)),
+                                ]),
+                              ),
+                            ),
+                          ])
+                        : Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                            Icon(Icons.add_a_photo_outlined,
+                                color: AC.peach(d), size: 34),
+                            const SizedBox(height: 8),
+                            Text('Tap to add a photo',
+                                style: TextStyle(
+                                    fontSize: 13,
+                                    color: AC.lt(d),
+                                    fontStyle: FontStyle.italic)),
+                          ]),
+                  ),
+                ),
+
+                // ── Header row ────────────────────────────────────────────
+                Row(children: [
+                  Text(c.emoji, style: const TextStyle(fontSize: 36)),
+                  const SizedBox(width: 12),
+                  Expanded(child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(c.name,
+                        style: TextStyle(fontSize: 22,
+                            fontWeight: FontWeight.bold, color: AC.sb(d))),
+                    Text('${c.completedCount}/6 steps complete',
+                        style: TextStyle(fontSize: 13, color: AC.lt(d))),
+                  ])),
+                  if (c.isComplete) Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: Colors.green.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                          color: Colors.green.withOpacity(0.4), width: 1.5)),
+                    child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                      Text('✅', style: TextStyle(fontSize: 12)),
+                      SizedBox(width: 4),
+                      Text('Done!',
+                          style: TextStyle(fontSize: 11,
+                              color: Colors.green,
+                              fontWeight: FontWeight.bold)),
+                    ]),
+                  ),
+                ]),
+                const SizedBox(height: 14),
+
+                // ── Animated progress bar ─────────────────────────────────
+                _AnimatedProgressBar(
+                  progress: c.progress,
+                  isComplete: c.isComplete,
+                  d: d,
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  c.isComplete
+                      ? '🎉 All steps completed! Your pet is fully registered.'
+                      : '${((c.progress) * 100).toInt()}% complete — ${6 - c.completedCount} step${6 - c.completedCount == 1 ? "" : "s"} remaining',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: c.isComplete ? Colors.green : AC.lt(d),
+                    fontWeight: c.isComplete ? FontWeight.bold : FontWeight.normal,
+                  ),
+                ),
+                const SizedBox(height: 20),
+
+                // ── Instruction ───────────────────────────────────────────
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: AC.sky(d).withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(12)),
+                  child: Row(children: [
+                    const Text('ℹ️', style: TextStyle(fontSize: 16)),
+                    const SizedBox(width: 8),
+                    Expanded(child: Text(
+                      'Tap the checkbox to mark a step done. Tap the step title to see details.',
+                      style: TextStyle(fontSize: 12, color: AC.mt(d), height: 1.4),
+                    )),
+                  ]),
+                ),
+                const SizedBox(height: 16),
+
+                // ── Steps with checkboxes ─────────────────────────────────
+                ...List.generate(_stepInfo.length, (i) {
+                  final s    = _stepInfo[i];
+                  final done = c.steps[i];
+                  final col  = _stepColors[i % _stepColors.length];
+
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 10),
+                    decoration: BoxDecoration(
+                      color: done
+                          ? col.withOpacity(0.85)
+                          : col.withOpacity(0.25),
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(
+                        color: done
+                            ? Colors.green.withOpacity(0.55)
+                            : col.withOpacity(0.6),
+                        width: done ? 2 : 1.5,
+                      ),
+                    ),
+                    child: Theme(
+                      data: Theme.of(ctx).copyWith(
+                          dividerColor: Colors.transparent),
+                      child: ExpansionTile(
+                        // ── Tappable checkbox on the left ─────────────────
+                        leading: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () async {
+                            setSt(() => c.steps[i] = !c.steps[i]);
+                            setState(() {});
+                            await AdoptSt.save(_cases);
+                          },
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 220),
+                            curve: Curves.easeInOut,
+                            width: 34, height: 34,
+                            decoration: BoxDecoration(
+                              color: done
+                                  ? Colors.green
+                                  : Colors.white.withOpacity(0.65),
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: done
+                                    ? Colors.green.shade700
+                                    : AC.lt(d),
+                                width: 2,
+                              ),
+                              boxShadow: done
+                                  ? [BoxShadow(
+                                      color: Colors.green.withOpacity(0.35),
+                                      blurRadius: 8,
+                                    )]
+                                  : null,
+                            ),
+                            child: done
+                                ? const Icon(Icons.check_rounded,
+                                    color: Colors.white, size: 18)
+                                : Center(child: Text(
+                                    s.n,
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.bold,
+                                      color: AC.lt(d),
+                                    ),
+                                  )),
+                          ),
+                        ),
+
+                        // ── Title ─────────────────────────────────────────
+                        title: Row(children: [
+                          Text(s.i, style: const TextStyle(fontSize: 18)),
+                          const SizedBox(width: 8),
+                          Expanded(child: Text(
+                            s.t,
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                              color: AC.sb(d),
+                              decoration: done
+                                  ? TextDecoration.lineThrough
+                                  : TextDecoration.none,
+                            ),
+                          )),
+                        ]),
+
+                        // ── Details (expanded) ────────────────────────────
+                        childrenPadding:
+                            const EdgeInsets.fromLTRB(16, 0, 16, 14),
+                        children: [
+                          Text(s.d,
+                              style: TextStyle(
+                                  fontSize: 13,
+                                  color: AC.mt(d),
+                                  height: 1.6)),
+                        ],
+                      ),
+                    ),
+                  );
+                }),
+
+                // ── Completion banner ─────────────────────────────────────
+                if (c.isComplete)
+                  Container(
+                    margin: const EdgeInsets.only(top: 8),
+                    padding: const EdgeInsets.all(18),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(colors: [
+                        Colors.green.withOpacity(0.15),
+                        Colors.teal.withOpacity(0.1),
+                      ]),
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(
+                          color: Colors.green.withOpacity(0.4), width: 2),
+                    ),
+                    child: Column(children: [
+                      const Text('🎉', style: TextStyle(fontSize: 36)),
+                      const SizedBox(height: 8),
+                      Text('Adoption Complete!',
+                          style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: AC.sb(d))),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${c.name} is officially part of the family. '
+                        'Remember annual check-ups and vaccine boosters!',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                            fontSize: 13, color: AC.mt(d), height: 1.5),
+                      ),
+                    ]),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ).then((_) => setState(() {}));
+  }
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // BUILD
+  // ════════════════════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext ctx) {
     final arg = ModalRoute.of(ctx)?.settings.arguments as ImageArg?;
     final d   = dark(ctx);
     final sb  = AC.sb(d);
-    final steps = [
-      _Stp('01','🩺','Visit a Veterinarian',   'Licensed vet exam, health certificate, microchip check.',           AC.blush(d)),
-      _Stp('02','📋','Register the Animal',     'City hall registration. Valid ID and vet certificate.',             AC.sage(d).withOpacity(0.6)),
-      _Stp('03','💉','Vaccinations',            'Anti-rabies, distemper vaccines and deworming.',                   AC.sky(d).withOpacity(0.6)),
-      _Stp('04','📝','Adoption Papers',         'Shelter agreement with home inspection consent.',                  AC.lav(d).withOpacity(0.6)),
-      _Stp('05','🏡','Prepare Your Home',       'Safe space with food, water, bedding.',                            AC.peach(d).withOpacity(0.5)),
-      _Stp('06','💛','Ongoing Healthcare',      'Vet check-ups every 6 months. Updated records.',                   AC.sage(d).withOpacity(0.4)),
-    ];
+
     return Scaffold(
       body: Container(
         decoration: gbg(d),
         child: SafeArea(child: Column(children: [
+
+          // ── Header ────────────────────────────────────────────────────────
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 16, 24, 0),
             child: Row(children: [
-              IconButton(onPressed: () => Navigator.pop(ctx), icon: const Icon(Icons.arrow_back_ios_new_rounded), color: sb),
-              Text('Adopt an Animal', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: sb)),
+              IconButton(
+                onPressed: () => Navigator.pop(ctx),
+                icon: const Icon(Icons.arrow_back_ios_new_rounded), color: sb,
+              ),
+              Text('Adopt an Animal',
+                  style: TextStyle(fontSize: 22,
+                      fontWeight: FontWeight.bold, color: sb)),
+              const Spacer(),
+              GestureDetector(
+                onTap: _addCase,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 14, vertical: 7),
+                  decoration: BoxDecoration(
+                    color: AC.peach(d),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(Icons.add, color: Colors.white, size: 16),
+                    SizedBox(width: 4),
+                    Text('Track',
+                        style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13)),
+                  ]),
+                ),
+              ),
             ]),
           ),
-          Expanded(child: ListView(padding: const EdgeInsets.all(20), children: [
-            if (arg != null && arg.has)
-              Container(
-                height: 180, margin: const EdgeInsets.only(bottom: 20),
-                decoration: BoxDecoration(borderRadius: BorderRadius.circular(20),
-                  boxShadow: [BoxShadow(color: AC.peach(d).withOpacity(0.3), blurRadius: 16, offset: const Offset(0, 6))]),
-                child: ClipRRect(borderRadius: BorderRadius.circular(20), child: bImg(arg)),
-              ),
-            Container(
-              padding: const EdgeInsets.all(16), margin: const EdgeInsets.only(bottom: 20),
-              decoration: BoxDecoration(color: AC.blush(d).withOpacity(0.5), borderRadius: BorderRadius.circular(16)),
-              child: Row(children: [
-                const Text('🐶', style: TextStyle(fontSize: 28)),
-                const SizedBox(width: 12),
-                Expanded(child: Text('Follow these steps for a safe and legal adoption.',
-                                     style: TextStyle(fontSize: 13, color: AC.mt(d), height: 1.5))),
-              ]),
+
+          // ── Tab bar ───────────────────────────────────────────────────────
+          Container(
+            margin: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+            decoration: BoxDecoration(
+                color: AC.card(d), borderRadius: BorderRadius.circular(12)),
+            child: TabBar(
+              controller: _tab,
+              labelColor: Colors.white,
+              unselectedLabelColor: AC.lt(d),
+              labelStyle: const TextStyle(
+                  fontSize: 13, fontWeight: FontWeight.bold),
+              indicator: BoxDecoration(
+                  color: AC.peach(d),
+                  borderRadius: BorderRadius.circular(10)),
+              tabs: [
+                const Tab(text: '📖 Guide'),
+                Tab(text: '📋 My Cases (${_cases.length})'),
+              ],
             ),
-            ...steps.map((s) => Container(
-              margin: const EdgeInsets.only(bottom: 14), padding: const EdgeInsets.all(18),
-              decoration: BoxDecoration(color: s.c, borderRadius: BorderRadius.circular(18),
-                boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 8, offset: const Offset(0, 3))]),
-              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Column(children: [
-                  Text(s.i, style: const TextStyle(fontSize: 28)),
-                  const SizedBox(height: 4),
-                  Text(s.n, style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AC.lt(d), letterSpacing: 1)),
+          ),
+
+          // ── Tab views ─────────────────────────────────────────────────────
+          Expanded(child: TabBarView(controller: _tab, children: [
+
+            // ══ GUIDE TAB ═══════════════════════════════════════════════════
+            ListView(padding: const EdgeInsets.all(20), children: [
+              if (arg != null && arg.has)
+                Container(
+                  height: 180, margin: const EdgeInsets.only(bottom: 20),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: [BoxShadow(
+                        color: AC.peach(d).withOpacity(0.3),
+                        blurRadius: 16, offset: const Offset(0, 6))],
+                  ),
+                  child: ClipRRect(
+                      borderRadius: BorderRadius.circular(20),
+                      child: bImg(arg)),
+                ),
+              Container(
+                padding: const EdgeInsets.all(16),
+                margin: const EdgeInsets.only(bottom: 20),
+                decoration: BoxDecoration(
+                    color: AC.blush(d).withOpacity(0.5),
+                    borderRadius: BorderRadius.circular(16)),
+                child: Row(children: [
+                  const Text('🐶', style: TextStyle(fontSize: 28)),
+                  const SizedBox(width: 12),
+                  Expanded(child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text('Tap a step to expand details.',
+                        style: TextStyle(
+                            fontSize: 13,
+                            color: AC.mt(d),
+                            fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 3),
+                    Text('Use "+ Track" to track progress per animal.',
+                        style: TextStyle(fontSize: 12, color: AC.lt(d))),
+                  ])),
                 ]),
-                const SizedBox(width: 16),
-                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(s.t, style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: sb)),
-                  const SizedBox(height: 6),
-                  Text(s.d, style: TextStyle(fontSize: 13, color: AC.mt(d), height: 1.5)),
-                ])),
-              ]),
-            )),
-            const SizedBox(height: 12),
+              ),
+              ...List.generate(_stepInfo.length, (i) {
+                final s   = _stepInfo[i];
+                final col = _stepColors[i % _stepColors.length];
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 14),
+                  decoration: BoxDecoration(
+                      color: col, borderRadius: BorderRadius.circular(18)),
+                  child: Theme(
+                    data: Theme.of(ctx)
+                        .copyWith(dividerColor: Colors.transparent),
+                    child: ExpansionTile(
+                      leading: Text(s.i,
+                          style: const TextStyle(fontSize: 26)),
+                      title: Text(s.t,
+                          style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.bold,
+                              color: sb)),
+                      subtitle: Text(s.n,
+                          style: TextStyle(
+                              fontSize: 10,
+                              color: AC.lt(d),
+                              letterSpacing: 1)),
+                      childrenPadding:
+                          const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                      children: [
+                        Text(s.d,
+                            style: TextStyle(
+                                fontSize: 13,
+                                color: AC.mt(d),
+                                height: 1.6)),
+                      ],
+                    ),
+                  ),
+                );
+              }),
+              const SizedBox(height: 12),
+            ]),
+
+            // ══ MY CASES TAB ════════════════════════════════════════════════
+            _loading
+                ? Center(child: CircularProgressIndicator(color: AC.peach(d)))
+                : _cases.isEmpty
+                    ? Center(child: Column(
+                        mainAxisSize: MainAxisSize.min, children: [
+                        const Text('🐾', style: TextStyle(fontSize: 48)),
+                        const SizedBox(height: 12),
+                        Text('No adoption cases yet',
+                            style: TextStyle(
+                                fontSize: 16,
+                                color: sb,
+                                fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 6),
+                        Text(
+                          'Tap "+ Track" to start tracking an animal',
+                          style: TextStyle(
+                              fontSize: 13,
+                              color: AC.lt(d),
+                              fontStyle: FontStyle.italic),
+                        ),
+                        const SizedBox(height: 20),
+                        GestureDetector(
+                          onTap: _addCase,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 24, vertical: 12),
+                            decoration: BoxDecoration(
+                              color: AC.peach(d),
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: const Row(
+                                mainAxisSize: MainAxisSize.min, children: [
+                              Icon(Icons.add, color: Colors.white),
+                              SizedBox(width: 6),
+                              Text('Track New Animal',
+                                  style: TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.bold)),
+                            ]),
+                          ),
+                        ),
+                      ]))
+                    : ListView.separated(
+                        padding: const EdgeInsets.all(16),
+                        itemCount: _cases.length,
+                        separatorBuilder: (_, __) =>
+                            const SizedBox(height: 10),
+                        itemBuilder: (_, i) {
+                          final c   = _cases[i];
+                          final col =
+                              _stepColors[i % _stepColors.length];
+                          return GestureDetector(
+                            onTap: () => _openCaseDetail(c),
+                            child: Container(
+                              padding: const EdgeInsets.all(14),
+                              decoration: BoxDecoration(
+                                color: col.withOpacity(0.35),
+                                borderRadius: BorderRadius.circular(18),
+                                border: Border.all(
+                                  color: c.isComplete
+                                      ? Colors.green.withOpacity(0.5)
+                                      : col,
+                                  width: 1.5,
+                                ),
+                              ),
+                              child: Row(children: [
+
+                                // ── Thumbnail or emoji ────────────────────
+                                Container(
+                                  width: 64, height: 64,
+                                  decoration: BoxDecoration(
+                                    color: col.withOpacity(0.4),
+                                    borderRadius:
+                                        BorderRadius.circular(12),
+                                  ),
+                                  child: c.imageBytes != null
+                                      ? ClipRRect(
+                                          borderRadius:
+                                              BorderRadius.circular(11),
+                                          child: Image.memory(
+                                            c.imageBytes!,
+                                            fit: BoxFit.cover,
+                                          ),
+                                        )
+                                      : Center(child: Text(c.emoji,
+                                          style: const TextStyle(
+                                              fontSize: 30))),
+                                ),
+                                const SizedBox(width: 12),
+
+                                // ── Info + progress ───────────────────────
+                                Expanded(child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.start,
+                                  children: [
+                                  Row(children: [
+                                    Expanded(child: Text(c.name,
+                                        style: TextStyle(
+                                            fontSize: 15,
+                                            fontWeight: FontWeight.bold,
+                                            color: sb))),
+                                    if (c.isComplete)
+                                      Container(
+                                        padding: const EdgeInsets
+                                            .symmetric(
+                                            horizontal: 6, vertical: 2),
+                                        decoration: BoxDecoration(
+                                          color: Colors.green
+                                              .withOpacity(0.15),
+                                          borderRadius:
+                                              BorderRadius.circular(8),
+                                        ),
+                                        child: const Text('✅ Done',
+                                            style: TextStyle(
+                                                fontSize: 10,
+                                                color: Colors.green,
+                                                fontWeight:
+                                                    FontWeight.bold)),
+                                      ),
+                                  ]),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    '${c.completedCount}/6 steps · '
+                                    '${(c.progress * 100).toInt()}%',
+                                    style: TextStyle(
+                                        fontSize: 12,
+                                        color: c.isComplete
+                                            ? Colors.green
+                                            : AC.lt(d),
+                                        fontWeight: c.isComplete
+                                            ? FontWeight.bold
+                                            : FontWeight.normal),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  // mini progress bar
+                                  ClipRRect(
+                                    borderRadius: BorderRadius.circular(4),
+                                    child: LinearProgressIndicator(
+                                      value: c.progress,
+                                      minHeight: 6,
+                                      backgroundColor:
+                                          Colors.white.withOpacity(0.4),
+                                      valueColor: AlwaysStoppedAnimation<
+                                              Color>(
+                                          c.isComplete
+                                              ? Colors.green
+                                              : AC.peach(d)),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  // mini step dots
+                                  Row(children:
+                                      List.generate(6, (si) => Container(
+                                        width: 20, height: 20,
+                                        margin: const EdgeInsets.only(
+                                            right: 3),
+                                        decoration: BoxDecoration(
+                                          color: c.steps[si]
+                                              ? Colors.green.withOpacity(0.8)
+                                              : Colors.white.withOpacity(0.5),
+                                          shape: BoxShape.circle,
+                                        ),
+                                        child: Center(child: Text(
+                                          _stepInfo[si].i,
+                                          style: TextStyle(
+                                            fontSize: 7,
+                                            color: c.steps[si]
+                                                ? Colors.white
+                                                : AC.lt(d),
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        )),
+                                      ))),
+                                ])),
+
+                                // ── Delete button ─────────────────────────
+                                GestureDetector(
+                                  onTap: () => _deleteCase(c),
+                                  child: Icon(
+                                    Icons.delete_outline_rounded,
+                                    color: Colors.redAccent.withOpacity(0.6),
+                                    size: 20,
+                                  ),
+                                ),
+                              ]),
+                            ),
+                          );
+                        },
+                      ),
           ])),
         ])),
       ),
@@ -6485,10 +7546,161 @@ class AdoptScreen extends StatelessWidget {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ANIMATED PROGRESS BAR WIDGET
+// ─────────────────────────────────────────────────────────────────────────────
+class _AnimatedProgressBar extends StatefulWidget {
+  final double progress;
+  final bool   isComplete;
+  final bool   d;
+  const _AnimatedProgressBar({
+    required this.progress,
+    required this.isComplete,
+    required this.d,
+  });
+  @override State<_AnimatedProgressBar> createState() =>
+      _AnimatedProgressBarState();
+}
+
+class _AnimatedProgressBarState extends State<_AnimatedProgressBar>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+  late Animation<double>   _anim;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 600));
+    _anim = Tween<double>(begin: 0, end: widget.progress)
+        .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOut));
+    _ctrl.forward();
+  }
+
+  @override
+  void didUpdateWidget(_AnimatedProgressBar old) {
+    super.didUpdateWidget(old);
+    if (old.progress != widget.progress) {
+      _anim = Tween<double>(begin: old.progress, end: widget.progress)
+          .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOut));
+      _ctrl
+        ..reset()
+        ..forward();
+    }
+  }
+
+  @override
+  void dispose() { _ctrl.dispose(); super.dispose(); }
+
+  @override
+  Widget build(BuildContext ctx) => AnimatedBuilder(
+    animation: _anim,
+    builder: (_, __) => Column(children: [
+      ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: LinearProgressIndicator(
+          value:      _anim.value,
+          minHeight:  14,
+          backgroundColor: AC.blush(widget.d).withOpacity(0.3),
+          valueColor: AlwaysStoppedAnimation<Color>(
+            widget.isComplete ? Colors.green : AC.peach(widget.d),
+          ),
+        ),
+      ),
+      const SizedBox(height: 4),
+      Row(children: [
+        ...List.generate(6, (i) {
+          final filled = _anim.value >= (i + 1) / 6 - 0.01;
+          return Expanded(child: Container(
+            height: 4,
+            margin: EdgeInsets.only(right: i < 5 ? 3 : 0, top: 2),
+            decoration: BoxDecoration(
+              color: filled
+                  ? (widget.isComplete ? Colors.green : AC.peach(widget.d))
+                  : AC.blush(widget.d).withOpacity(0.25),
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ));
+        }),
+      ]),
+    ]),
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// IMAGE SOURCE PICKER SHEET  (shared helper)
+// ─────────────────────────────────────────────────────────────────────────────
+class _ImageSourceSheet extends StatelessWidget {
+  final bool d;
+  const _ImageSourceSheet({required this.d});
+
+  @override
+  Widget build(BuildContext ctx) => Container(
+    margin: const EdgeInsets.all(16),
+    padding: const EdgeInsets.fromLTRB(24, 20, 24, 28),
+    decoration: BoxDecoration(
+      color: AC.card(d),
+      borderRadius: BorderRadius.circular(24),
+    ),
+    child: Column(mainAxisSize: MainAxisSize.min, children: [
+      Text('Add Photo', style: TextStyle(
+          fontSize: 17, fontWeight: FontWeight.bold, color: AC.sb(d))),
+      const SizedBox(height: 18),
+      Row(children: [
+        Expanded(child: GestureDetector(
+          onTap: () => Navigator.pop(ctx, ImageSource.camera),
+          child: Container(
+            padding: const EdgeInsets.symmetric(vertical: 18),
+            decoration: BoxDecoration(
+              color: AC.sky(d).withOpacity(0.4),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: AC.sky(d), width: 1.5),
+            ),
+            child: Column(children: [
+              Icon(Icons.camera_alt_outlined, color: AC.sb(d), size: 28),
+              const SizedBox(height: 6),
+              Text('Camera', style: TextStyle(
+                  fontSize: 13, fontWeight: FontWeight.w600, color: AC.sb(d))),
+            ]),
+          ),
+        )),
+        const SizedBox(width: 12),
+        Expanded(child: GestureDetector(
+          onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+          child: Container(
+            padding: const EdgeInsets.symmetric(vertical: 18),
+            decoration: BoxDecoration(
+              color: AC.sage(d).withOpacity(0.4),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: AC.sage(d), width: 1.5),
+            ),
+            child: Column(children: [
+              Icon(Icons.photo_library_outlined, color: AC.sb(d), size: 28),
+              const SizedBox(height: 6),
+              Text('Gallery', style: TextStyle(
+                  fontSize: 13, fontWeight: FontWeight.w600, color: AC.sb(d))),
+            ]),
+          ),
+        )),
+      ]),
+      const SizedBox(height: 12),
+      GestureDetector(
+        onTap: () => Navigator.pop(ctx),
+        child: Text('Cancel',
+            style: TextStyle(
+                fontSize: 14, color: AC.lt(d), fontWeight: FontWeight.w500)),
+      ),
+    ]),
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// _Stp helper class  (keep this — same as before)
+// ─────────────────────────────────────────────────────────────────────────────
 class _Stp {
   final String n, i, t, d;
-  final Color  c;
-  _Stp(this.n, this.i, this.t, this.d, this.c);
+  final Color?  c;
+  const _Stp(this.n, this.i, this.t, this.d, this.c);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
