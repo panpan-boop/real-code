@@ -16,7 +16,6 @@ dependencies:
   image_picker: ^1.1.2
   shared_preferences: ^2.3.1
   url_launcher: ^6.3.0
-  flutter_windowmanager: ^0.2.0    # ← MOVED HERE, inside dependencies
 
 dev_dependencies:
   flutter_test:
