@@ -23,30 +23,22 @@ import 'package:flutter/services.dart';
 class ScreenSecurity {
   static const _channel = MethodChannel('com.alagap.app/screen_security');
 
-  /// BLOCK screenshots kineme (camera, map, sensitive screens)
   static Future<void> enableSecureMode() async {
-    if (Platform.isAndroid) {
-      try {
+    if (kIsWeb) return;
+    try {
+      if (Platform.isAndroid || Platform.isIOS) {
         await _channel.invokeMethod('setSecureFlag', {'secure': true});
-      } catch (_) {}
-    } else if (Platform.isIOS) {
-      try {
-        await _channel.invokeMethod('setSecureFlag', {'secure': true});
-      } catch (_) {}
-    }
+      }
+    } catch (_) {}
   }
 
-  /// Allow screenshots kineme(normal screens)
   static Future<void> disableSecureMode() async {
-    if (Platform.isAndroid) {
-      try {
+    if (kIsWeb) return;
+    try {
+      if (Platform.isAndroid || Platform.isIOS) {
         await _channel.invokeMethod('setSecureFlag', {'secure': false});
-      } catch (_) {}
-    } else if (Platform.isIOS) {
-      try {
-        await _channel.invokeMethod('setSecureFlag', {'secure': false});
-      } catch (_) {}
-    }
+      }
+    } catch (_) {}
   }
 }
 
