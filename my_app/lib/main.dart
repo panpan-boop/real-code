@@ -1,4 +1,4 @@
-// ALAG-AP — Complete Flutter App
+// ALAG-AP 
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
@@ -15,7 +15,41 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'dart:convert'; // add this import if not already present
 import 'dart:typed_data';
-// ── EMBEDDED LOGO (base64-encoded PNG) ───────────────────────────────────────
+import 'package:flutter/services.dart';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SCREEN SECURITY HELPER
+// ─────────────────────────────────────────────────────────────────────────────
+class ScreenSecurity {
+  static const _channel = MethodChannel('com.alagap.app/screen_security');
+
+  /// BLOCK screenshots kineme (camera, map, sensitive screens)
+  static Future<void> enableSecureMode() async {
+    if (Platform.isAndroid) {
+      try {
+        await _channel.invokeMethod('setSecureFlag', {'secure': true});
+      } catch (_) {}
+    } else if (Platform.isIOS) {
+      try {
+        await _channel.invokeMethod('setSecureFlag', {'secure': true});
+      } catch (_) {}
+    }
+  }
+
+  /// Allow screenshots kineme(normal screens)
+  static Future<void> disableSecureMode() async {
+    if (Platform.isAndroid) {
+      try {
+        await _channel.invokeMethod('setSecureFlag', {'secure': false});
+      } catch (_) {}
+    } else if (Platform.isIOS) {
+      try {
+        await _channel.invokeMethod('setSecureFlag', {'secure': false});
+      } catch (_) {}
+    }
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // THEME
 // ─────────────────────────────────────────────────────────────────────────────
@@ -5314,16 +5348,26 @@ class _HomeS extends State<HomeScreen> with SingleTickerProviderStateMixin {
     });
   }
   @override void dispose() { _fc.dispose(); super.dispose(); }
-
+  
   Future<void> _photo(ImageSource src) async {
-    final x = await _picker.pickImage(source: src, imageQuality: 80, maxWidth: 1024, maxHeight: 1024);
-    if (x == null) return;
-    if (kIsWeb) {
-      setState(() { _wu = x.path; _b = null; _f = null; });
-    } else {
-      setState(() { _f = File(x.path); _b = null; _wu = null; });
+    try {
+      final x = await _picker.pickImage(
+        source: src,
+        imageQuality: 80,
+        maxWidth: 1024,
+        maxHeight: 1024,
+      );
+      if (x == null) return;
+      if (kIsWeb) {
+        setState(() { _wu = x.path; _b = null; _f = null; });
+      } else {
+        setState(() { _f = File(x.path); _b = null; _wu = null; });
+      }
+    } catch (e) {
+      debugPrint('Image pick error: $e');
     }
   }
+
 
   void _clear() => setState(() { _f = null; _b = null; _wu = null; });
 
@@ -5509,6 +5553,7 @@ class _HomeS extends State<HomeScreen> with SingleTickerProviderStateMixin {
       ),
     );
   }
+
 
   Widget _actions(bool d) {
     return Column(children: [
@@ -6415,7 +6460,6 @@ class _ProfileS extends State<ProfileScreen> {
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// PASTE THIS ENTIRE FILE'S CONTENT INTO YOUR main.dart, REPLACING THESE SECTIONS:
 //   1. The `AdoptionCase` class
 //   2. The `AdoptSt` class
 //   3. The `AdoptScreen` class and `_AdoptS` state
@@ -6727,17 +6771,18 @@ class _AdoptS extends State<AdoptScreen> with SingleTickerProviderStateMixin {
 
   // ── Pick image helper ────────────────────────────────────────────────────────
   Future<String?> _pickImageAsBase64(ImageSource source) async {
-    final x = await _picker.pickImage(
-      source: source, imageQuality: 60, maxWidth: 600, maxHeight: 600,
-    );
-    if (x == null) return null;
-    final raw = await x.readAsBytes();
-    // Cap at 200 KB to avoid SharedPreferences bloat
-    final cap = raw.length > 200 * 1024
-        ? Uint8List.fromList(raw.sublist(0, 200 * 1024))
-        : raw;
-    return base64Encode(cap);
-  }
+   await ScreenSecurity.enableSecureMode();
+   final x = await _picker.pickImage(
+    source: source, imageQuality: 60, maxWidth: 600, maxHeight: 600,
+  );
+   await ScreenSecurity.disableSecureMode();
+   if (x == null) return null;
+   final raw = await x.readAsBytes();
+   final cap = raw.length > 200 * 1024
+       ? Uint8List.fromList(raw.sublist(0, 200 * 1024))
+       : raw;
+   return base64Encode(cap);
+}
 
   // ── Attach / change image for an existing case ───────────────────────────────
   Future<void> _attachImage(AdoptionCase c) async {
@@ -6753,6 +6798,7 @@ class _AdoptS extends State<AdoptScreen> with SingleTickerProviderStateMixin {
     setState(() => c.imagePath = b64);
     await AdoptSt.save(_cases);
   }
+
 
   // ── Add new case ─────────────────────────────────────────────────────────────
   Future<void> _addCase() async {
@@ -7589,8 +7635,60 @@ class _AnimatedProgressBarState extends State<_AnimatedProgressBar>
     }
   }
 
-  @override
-  void dispose() { _ctrl.dispose(); super.dispose(); }
+
+  Widget _buildStatusBadge(AdoptionCase c, bool d) {
+    if (c.isComplete) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: Colors.green.withOpacity(0.15),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: Colors.green.withOpacity(0.4), width: 1),
+        ),
+        child: const Text(
+          'Complete ✓',
+          style: TextStyle(fontSize: 11, color: Colors.green, fontWeight: FontWeight.bold),
+        ),
+      );
+    }
+
+    if (c.completedCount == 0) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFEF0E6),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: const Color(0xFFE8A87C), width: 1),
+        ),
+        child: const Text(
+          'Action needed — vet check overdue',
+          style: TextStyle(
+            fontSize: 11,
+            color: Color(0xFFB85D0A),
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      );
+    }
+
+    final nextStep = c.steps.indexWhere((s) => !s) + 1;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: const Color(0xFFE8F0FD),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFF8AB4F8), width: 1),
+      ),
+      child: Text(
+        'In progress — step $nextStep of 6',
+        style: const TextStyle(
+          fontSize: 11,
+          color: Color(0xFF1A56C4),
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext ctx) => AnimatedBuilder(
@@ -7727,8 +7825,19 @@ class _ReportS extends State<ReportScreen> {
   List<String>    _hist     = [];
   List<String>    _sugg     = [];
 
-  @override void initState() { super.initState(); _init(); }
-  @override void dispose()   { _sc.dispose(); super.dispose(); }
+  @override
+  void initState() {
+   super.initState();
+   ScreenSecurity.enableSecureMode();
+   _init();
+  }
+
+  @override
+  void dispose() {
+   ScreenSecurity.disableSecureMode();
+   _sc.dispose();
+   super.dispose();
+  }
 
   Future<void> _init() async {
     final h = await St.hist();

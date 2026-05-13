@@ -36,4 +36,8 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
-  # No assets section needed — logo is embedded directly in the Dart code
+
+
+flutter_windowmanager: ^0.2.0  # Android
+
+
