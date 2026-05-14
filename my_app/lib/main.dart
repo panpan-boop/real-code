@@ -682,6 +682,8 @@ Future<List<String>> suggest(String q) async {
 // ─────────────────────────────────────────────────────────────────────────────
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  await ScreenSecurity.enableSecureMode();
   
   FlutterError.onError = (details) {
     FlutterError.presentError(details);
