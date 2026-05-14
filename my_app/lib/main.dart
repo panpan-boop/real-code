@@ -5350,23 +5350,27 @@ class _HomeS extends State<HomeScreen> with SingleTickerProviderStateMixin {
   @override void dispose() { _fc.dispose(); super.dispose(); }
   
   Future<void> _photo(ImageSource src) async {
-    try {
-      final x = await _picker.pickImage(
-        source: src,
-        imageQuality: 80,
-        maxWidth: 1024,
-        maxHeight: 1024,
-      );
-      if (x == null) return;
-      if (kIsWeb) {
-        setState(() { _wu = x.path; _b = null; _f = null; });
-      } else {
-        setState(() { _f = File(x.path); _b = null; _wu = null; });
-      }
+      await ScreenSecurity.enableSecureMode();
+      try {
+        final x = await _picker.pickImage(
+          source: src,
+          imageQuality: 80,
+          maxWidth: 1024,
+          maxHeight: 1024,
+        );
+       await ScreenSecurity.disableSecureMode();
+       if (x == null) return;
+       if (kIsWeb) {
+         setState(() { _wu = x.path; _b = null; _f = null; });
+       } else {
+         setState(() { _f = File(x.path); _b = null; _wu = null; });
+       }
     } catch (e) {
+      await ScreenSecurity.disableSecureMode();
       debugPrint('Image pick error: $e');
     }
   }
+
 
 
   void _clear() => setState(() { _f = null; _b = null; _wu = null; });
@@ -6771,18 +6775,26 @@ class _AdoptS extends State<AdoptScreen> with SingleTickerProviderStateMixin {
 
   // ── Pick image helper ────────────────────────────────────────────────────────
   Future<String?> _pickImageAsBase64(ImageSource source) async {
-   await ScreenSecurity.enableSecureMode();
-   final x = await _picker.pickImage(
-    source: source, imageQuality: 60, maxWidth: 600, maxHeight: 600,
-  );
-   await ScreenSecurity.disableSecureMode();
-   if (x == null) return null;
-   final raw = await x.readAsBytes();
-   final cap = raw.length > 200 * 1024
-       ? Uint8List.fromList(raw.sublist(0, 200 * 1024))
-       : raw;
-   return base64Encode(cap);
-}
+      await ScreenSecurity.enableSecureMode();
+      try {
+        final x = await _picker.pickImage(
+          source: source, imageQuality: 60, maxWidth: 600, maxHeight: 600,
+        );
+        if (x == null) {
+          await ScreenSecurity.disableSecureMode();
+          return null;
+        }
+        final raw = await x.readAsBytes();
+        final cap = raw.length > 200 * 1024
+            ? Uint8List.fromList(raw.sublist(0, 200 * 1024))
+            : raw;
+        await ScreenSecurity.disableSecureMode();
+        return base64Encode(cap);
+      } catch (e) {
+        await ScreenSecurity.disableSecureMode();
+        return null;
+      }
+  }
 
   // ── Attach / change image for an existing case ───────────────────────────────
   Future<void> _attachImage(AdoptionCase c) async {
