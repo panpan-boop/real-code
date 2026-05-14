@@ -682,12 +682,20 @@ Future<List<String>> suggest(String q) async {
 // ─────────────────────────────────────────────────────────────────────────────
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  FlutterError.onError = (details) {
+    FlutterError.presentError(details);
+    debugPrint('FLUTTER ERROR: ${details.exception}');
+    debugPrint('STACK: ${details.stack}');
+  };
+
   if (!kIsWeb) {
     SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
       statusBarIconBrightness: Brightness.dark,
     ));
   }
+  
   await St.load();
   runApp(const App());
 }
